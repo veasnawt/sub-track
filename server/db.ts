@@ -394,14 +394,11 @@ export function createUniversalJsDb(storageFile?: string) {
 
 let storagePath: string | undefined;
 try {
-  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || !fs.existsSync(path.join(__dirname, 'data'))) {
-    const tmpDir = '/tmp';
-    if (fs.existsSync(tmpDir)) {
-      storagePath = path.join(tmpDir, 'subtrack_db.json');
-    }
-  }
-  if (!storagePath) {
-    const dataDir = path.join(__dirname, 'data');
+  const tmpDir = '/tmp';
+  if (fs.existsSync(tmpDir)) {
+    storagePath = path.join(tmpDir, 'subtrack_db.json');
+  } else {
+    const dataDir = path.join(process.cwd(), 'server', 'data');
     if (!fs.existsSync(dataDir)) {
       try {
         fs.mkdirSync(dataDir, { recursive: true });

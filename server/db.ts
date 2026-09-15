@@ -392,15 +392,25 @@ export function createUniversalJsDb(storageFile?: string) {
   };
 }
 
-const storagePath = process.env.VERCEL
-  ? path.join('/tmp', 'subtrack_db.json')
-  : path.join(__dirname, 'data', 'subscriptions.json');
-
-const dir = path.dirname(storagePath);
-if (!fs.existsSync(dir)) {
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch (e) {}
+let storagePath: string | undefined;
+try {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || !fs.existsSync(path.join(__dirname, 'data'))) {
+    const tmpDir = '/tmp';
+    if (fs.existsSync(tmpDir)) {
+      storagePath = path.join(tmpDir, 'subtrack_db.json');
+    }
+  }
+  if (!storagePath) {
+    const dataDir = path.join(__dirname, 'data');
+    if (!fs.existsSync(dataDir)) {
+      try {
+        fs.mkdirSync(dataDir, { recursive: true });
+      } catch (e) {}
+    }
+    storagePath = path.join(dataDir, 'subscriptions.json');
+  }
+} catch (e) {
+  storagePath = undefined;
 }
 
 export const db = createUniversalJsDb(storagePath);
@@ -480,22 +490,26 @@ export const DEFAULT_CATEGORIES = [
 ];
 
 export function seedDemoUser() {
-  const existingDemo = db.prepare('SELECT id FROM users WHERE email = ?').get('demo@subtrack.app') as { id: string } | undefined;
-  
-  const demoUserId = existingDemo ? existingDemo.id : 'demo-user-id-001';
+  try {
+    const existingDemo = db.prepare('SELECT id FROM users WHERE email = ?').get('demo@subtrack.app') as { id: string } | undefined;
+    
+    const demoUserId = existingDemo ? existingDemo.id : 'demo-user-id-001';
 
-  if (!existingDemo) {
-    const passwordHash = bcrypt.hashSync('demo1234', 10);
-    db.prepare(`
-      INSERT INTO users (id, name, email, password_hash, currency, theme)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(demoUserId, 'Alex Taylor', 'demo@subtrack.app', passwordHash, 'USD', 'system');
-  }
+    if (!existingDemo) {
+      const passwordHash = bcrypt.hashSync('demo1234', 10);
+      db.prepare(`
+        INSERT INTO users (id, name, email, password_hash, currency, theme)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(demoUserId, 'Alex Taylor', 'demo@subtrack.app', passwordHash, 'USD', 'system');
+    }
 
-  // Seed subscriptions if user has none
-  const count = (db.prepare('SELECT COUNT(*) as count FROM subscriptions WHERE user_id = ?').get(demoUserId) as { count: number }).count;
-  if (count === 0) {
-    seedSubscriptionsForUser(demoUserId);
+    // Seed subscriptions if user has none
+    const count = (db.prepare('SELECT COUNT(*) as count FROM subscriptions WHERE user_id = ?').get(demoUserId) as { count: number })?.count || 0;
+    if (count === 0) {
+      seedSubscriptionsForUser(demoUserId);
+    }
+  } catch (err) {
+    console.warn('seedDemoUser non-fatal error:', err);
   }
 }
 
@@ -749,5 +763,9 @@ export function seedSubscriptionsForUser(userId: string) {
     }
   });
 
-  insertMany(sampleSubscriptions);
+  try {
+    insertMany(sampleSubscriptions);
+  } catch (err) {
+    console.warn('seedSubscriptionsForUser non-fatal error:', err);
+  }
 }

@@ -22,131 +22,165 @@ const LoginSchema = z.object({
 });
 
 router.post('/register', (req, res) => {
-  const result = RegisterSchema.safeParse(req.body);
-  if (!result.success) {
-    return res.status(400).json({
+  try {
+    const result = RegisterSchema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error.issues[0].message,
+      });
+    }
+
+    const { name, email, password, currency, seedSamples } = result.data;
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail);
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        error: 'An account with this email already exists',
+      });
+    }
+
+    const userId = (crypto && typeof crypto.randomUUID === 'function')
+      ? crypto.randomUUID()
+      : `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const passwordHash = bcrypt.hashSync(password, 10);
+
+    db.prepare(`
+      INSERT INTO users (id, name, email, password_hash, currency)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(userId, name.trim(), normalizedEmail, passwordHash, currency.toUpperCase());
+
+    if (seedSamples) {
+      try {
+        seedSubscriptionsForUser(userId);
+      } catch (seedErr) {
+        console.warn('Sample subscription seeding non-fatal error:', seedErr);
+      }
+    }
+
+    const userPayload = {
+      userId,
+      name: name.trim(),
+      email: normalizedEmail,
+      currency: currency.toUpperCase(),
+    };
+
+    const token = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '30d' });
+
+    return res.status(201).json({
+      success: true,
+      token,
+      user: userPayload,
+    });
+  } catch (err: any) {
+    console.error('Registration unhandled error:', err);
+    return res.status(500).json({
       success: false,
-      error: result.error.issues[0].message,
+      error: err?.message || 'Registration failed. Please try again.',
     });
   }
-
-  const { name, email, password, currency, seedSamples } = result.data;
-  const normalizedEmail = email.toLowerCase().trim();
-
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail);
-  if (existing) {
-    return res.status(409).json({
-      success: false,
-      error: 'An account with this email already exists',
-    });
-  }
-
-  const userId = crypto.randomUUID();
-  const passwordHash = bcrypt.hashSync(password, 10);
-
-  db.prepare(`
-    INSERT INTO users (id, name, email, password_hash, currency)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(userId, name.trim(), normalizedEmail, passwordHash, currency.toUpperCase());
-
-  if (seedSamples) {
-    seedSubscriptionsForUser(userId);
-  }
-
-  const userPayload = {
-    userId,
-    name: name.trim(),
-    email: normalizedEmail,
-    currency: currency.toUpperCase(),
-  };
-
-  const token = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '30d' });
-
-  return res.status(201).json({
-    success: true,
-    token,
-    user: userPayload,
-  });
 });
 
 router.post('/login', (req, res) => {
-  const result = LoginSchema.safeParse(req.body);
-  if (!result.success) {
-    return res.status(400).json({
+  try {
+    const result = LoginSchema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error.issues[0].message,
+      });
+    }
+
+    const { email, password } = result.data;
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(normalizedEmail) as any;
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid email or password',
+      });
+    }
+
+    const passwordValid = bcrypt.compareSync(password, user.password_hash);
+    if (!passwordValid) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid email or password',
+      });
+    }
+
+    const userPayload = {
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      currency: user.currency || 'USD',
+    };
+
+    const token = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '30d' });
+
+    return res.json({
+      success: true,
+      token,
+      user: userPayload,
+    });
+  } catch (err: any) {
+    console.error('Login unhandled error:', err);
+    return res.status(500).json({
       success: false,
-      error: result.error.issues[0].message,
+      error: err?.message || 'Login failed. Please try again.',
     });
   }
-
-  const { email, password } = result.data;
-  const normalizedEmail = email.toLowerCase().trim();
-
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(normalizedEmail) as any;
-  if (!user) {
-    return res.status(401).json({
-      success: false,
-      error: 'Invalid email or password',
-    });
-  }
-
-  const passwordValid = bcrypt.compareSync(password, user.password_hash);
-  if (!passwordValid) {
-    return res.status(401).json({
-      success: false,
-      error: 'Invalid email or password',
-    });
-  }
-
-  const userPayload = {
-    userId: user.id,
-    name: user.name,
-    email: user.email,
-    currency: user.currency || 'USD',
-  };
-
-  const token = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '30d' });
-
-  return res.json({
-    success: true,
-    token,
-    user: userPayload,
-  });
 });
 
 router.post('/demo', (req, res) => {
-  const demoEmail = 'demo@subtrack.app';
-  let demoUser = db.prepare('SELECT * FROM users WHERE email = ?').get(demoEmail) as any;
+  try {
+    const demoEmail = 'demo@subtrack.app';
+    let demoUser = db.prepare('SELECT * FROM users WHERE email = ?').get(demoEmail) as any;
 
-  if (!demoUser) {
-    const demoUserId = 'demo-user-id-001';
-    const passwordHash = bcrypt.hashSync('demo1234', 10);
-    db.prepare(`
-      INSERT INTO users (id, name, email, password_hash, currency, theme)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(demoUserId, 'Alex Taylor', demoEmail, passwordHash, 'USD', 'system');
-    seedSubscriptionsForUser(demoUserId);
-    demoUser = {
-      id: demoUserId,
-      name: 'Alex Taylor',
-      email: demoEmail,
-      currency: 'USD',
+    if (!demoUser) {
+      const demoUserId = 'demo-user-id-001';
+      const passwordHash = bcrypt.hashSync('demo1234', 10);
+      db.prepare(`
+        INSERT INTO users (id, name, email, password_hash, currency, theme)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(demoUserId, 'Alex Taylor', demoEmail, passwordHash, 'USD', 'system');
+      try {
+        seedSubscriptionsForUser(demoUserId);
+      } catch (seedErr) {
+        console.warn('Demo subscription seeding non-fatal error:', seedErr);
+      }
+      demoUser = {
+        id: demoUserId,
+        name: 'Alex Taylor',
+        email: demoEmail,
+        currency: 'USD',
+      };
+    }
+
+    const userPayload = {
+      userId: demoUser.id,
+      name: demoUser.name,
+      email: demoUser.email,
+      currency: demoUser.currency || 'USD',
     };
+
+    const token = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '30d' });
+
+    return res.json({
+      success: true,
+      token,
+      user: userPayload,
+    });
+  } catch (err: any) {
+    console.error('Demo auth unhandled error:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Demo login failed. Please try again.',
+    });
   }
-
-  const userPayload = {
-    userId: demoUser.id,
-    name: demoUser.name,
-    email: demoUser.email,
-    currency: demoUser.currency || 'USD',
-  };
-
-  const token = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '30d' });
-
-  return res.json({
-    success: true,
-    token,
-    user: userPayload,
-  });
 });
 
 router.get('/me', authMiddleware, (req: AuthenticatedRequest, res) => {

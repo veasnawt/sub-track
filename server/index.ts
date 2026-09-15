@@ -21,19 +21,34 @@ try {
 }
 
 app.use(cors());
+
+// Body handling defense: if body was already parsed by Vercel serverless runtime or an edge layer, mark it so body-parser does not hang
+app.use((req: any, res, next) => {
+  if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+    req._body = true;
+  } else if (typeof req.body === 'string' && req.body.length > 0) {
+    try {
+      req.body = JSON.parse(req.body);
+      req._body = true;
+    } catch (e) {}
+  }
+  next();
+});
+
 app.use(express.json());
 
-// Path Normalizer: Ensures Vercel Serverless Rewrites preserve subpaths
+// Path Normalizer: Ensures Vercel Serverless Rewrites and catch-alls preserve subpaths
 app.use((req, res, next) => {
-  if (req.query && req.query.match) {
-    const subpath = Array.isArray(req.query.match) ? req.query.match.join('/') : String(req.query.match);
+  if (req.query && (req.query.match || req.query.path)) {
+    const raw = req.query.match || req.query.path;
+    const subpath = Array.isArray(raw) ? raw.join('/') : String(raw);
     if (subpath) {
       const qIndex = req.url.indexOf('?');
       const search = qIndex !== -1 ? req.url.substring(qIndex) : '';
       req.url = `/api/${subpath}${search}`;
     }
   } else {
-    const matched = (req.headers['x-matched-path'] as string) || (req.headers['x-now-route-matches'] as string);
+    const matched = (req.headers['x-matched-path'] as string) || (req.headers['x-now-route-matches'] as string) || (req.headers['x-forwarded-uri'] as string);
     if (matched && matched.startsWith('/api') && (req.url === '/api' || req.url === '/' || req.url === '')) {
       req.url = matched;
     }
@@ -92,10 +107,12 @@ if (!process.env.VERCEL) {
 // Global Error Handler
 app.use((err: any, req: any, res: any, next: any) => {
   console.error('Unhandled server error:', err);
-  res.status(500).json({
-    success: false,
-    error: err.message || 'Internal Server Error',
-  });
+  if (!res.headersSent) {
+    res.status(err?.status || err?.statusCode || 500).json({
+      success: false,
+      error: err?.message || 'Internal Server Error',
+    });
+  }
 });
 
 if (!process.env.VERCEL) {

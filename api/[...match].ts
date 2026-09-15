@@ -1,15 +1,6 @@
-import app from '../server/index';
+import handler, { config } from './index';
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
-const handler = (req: any, res: any) => {
-  return app(req, res);
-};
-
+export { config };
 export default handler;
 
 // Ensure compatibility with both ESM and CommonJS runtimes on Vercel

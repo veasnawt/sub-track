@@ -13,31 +13,42 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Initialize database schema and demo user
-initDatabase();
+// Initialize database schema and demo user safely
+try {
+  initDatabase();
+} catch (err) {
+  console.error('Database initialization warning:', err);
+}
 
 app.use(cors());
 app.use(express.json());
 
-// API Routes
+// API Routes - mount both with /api and without /api in case Vercel rewrites strip prefix
 app.use('/api/auth', authRouter);
+app.use('/auth', authRouter);
+
 app.use('/api/subscriptions', subscriptionsRouter);
+app.use('/subscriptions', subscriptionsRouter);
+
 app.use('/api/analytics', analyticsRouter);
+app.use('/analytics', analyticsRouter);
+
 app.use('/api/categories', categoriesRouter);
+app.use('/categories', categoriesRouter);
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
+app.get(['/api/health', '/health'], (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// In production, serve frontend build
+// In production / standalone, serve frontend build
 const distPath = path.resolve(__dirname, '../dist');
 app.use(express.static(distPath));
 
+// Fallback for client-side routing
 app.use((req, res) => {
-  // If request starts with /api, return 404
   if (req.path.startsWith('/api')) {
-    return res.status(404).json({ success: false, error: 'Endpoint not found' });
+    return res.status(404).json({ success: false, error: `Endpoint ${req.path} not found` });
   }
   const indexHtml = path.join(distPath, 'index.html');
   res.sendFile(indexHtml, (err) => {
@@ -51,6 +62,15 @@ app.use((req, res) => {
         </html>
       `);
     }
+  });
+});
+
+// Global Error Handler
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error('Unhandled server error:', err);
+  res.status(500).json({
+    success: false,
+    error: err.message || 'Internal Server Error',
   });
 });
 

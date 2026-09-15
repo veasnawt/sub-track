@@ -1,22 +1,422 @@
-import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
 
-// Ensure data directory exists. On Vercel, serverless functions can only write to /tmp.
-const dataDir = process.env.VERCEL
-  ? path.join('/tmp', 'data')
-  : path.resolve(__dirname, 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+interface Store {
+  users: any[];
+  categories: any[];
+  subscriptions: any[];
+  payment_history: any[];
 }
 
-const dbPath = path.join(dataDir, 'subscriptions.db');
-export const db = new Database(dbPath);
+export function createUniversalJsDb(storageFile?: string) {
+  const store: Store = {
+    users: [],
+    categories: [],
+    subscriptions: [],
+    payment_history: [],
+  };
 
-// Enable WAL mode for better concurrency and performance
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+  function save() {
+    if (storageFile) {
+      try {
+        fs.writeFileSync(storageFile, JSON.stringify(store, null, 2), 'utf8');
+      } catch (e) {}
+    }
+  }
+
+  function load() {
+    if (storageFile && fs.existsSync(storageFile)) {
+      try {
+        const raw = fs.readFileSync(storageFile, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed.users) store.users = parsed.users;
+        if (parsed.categories) store.categories = parsed.categories;
+        if (parsed.subscriptions) store.subscriptions = parsed.subscriptions;
+        if (parsed.payment_history) store.payment_history = parsed.payment_history;
+      } catch (e) {}
+    }
+  }
+
+  load();
+
+  return {
+    pragma: () => {},
+    exec: () => {},
+    transaction: (fn: any) => (...args: any[]) => fn(...args),
+    prepare: (sql: string) => {
+      const cleanSql = sql.trim().replace(/\s+/g, ' ');
+
+      return {
+        get: (...params: any[]) => {
+          const args = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+
+          if (cleanSql.includes('FROM users WHERE email = ?')) {
+            const email = String(args[0]).toLowerCase().trim();
+            const user = store.users.find(u => u.email.toLowerCase().trim() === email);
+            if (!user) return undefined;
+            if (cleanSql.includes('SELECT id FROM users')) return { id: user.id };
+            return { ...user };
+          }
+
+          if (cleanSql.includes('FROM users WHERE id = ?')) {
+            const id = args[0];
+            const user = store.users.find(u => u.id === id);
+            return user ? { ...user } : undefined;
+          }
+
+          if (cleanSql.includes('COUNT(*) as count FROM subscriptions WHERE user_id = ?')) {
+            const userId = args[0];
+            const count = store.subscriptions.filter(s => s.user_id === userId).length;
+            return { count };
+          }
+
+          if (cleanSql.includes('FROM subscriptions WHERE id = ? AND user_id = ?')) {
+            const [id, userId] = args;
+            const sub = store.subscriptions.find(s => s.id === id && s.user_id === userId);
+            return sub ? { ...sub } : undefined;
+          }
+
+          if (cleanSql.includes('FROM subscriptions WHERE id = ?')) {
+            const id = args[0];
+            const sub = store.subscriptions.find(s => s.id === id);
+            return sub ? { ...sub } : undefined;
+          }
+
+          if (cleanSql.includes('FROM categories WHERE id = ?')) {
+            const id = args[0];
+            const cat = store.categories.find(c => c.id === id);
+            return cat ? { ...cat } : undefined;
+          }
+
+          return undefined;
+        },
+
+        all: (...params: any[]) => {
+          const args = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+
+          if (cleanSql.includes('FROM payment_history WHERE subscription_id = ?')) {
+            const subId = args[0];
+            return store.payment_history
+              .filter(p => p.subscription_id === subId)
+              .sort((a, b) => new Date(b.billing_date).getTime() - new Date(a.billing_date).getTime());
+          }
+
+          if (cleanSql.includes('FROM categories WHERE user_id = ?')) {
+            const userId = args[0];
+            return store.categories.filter(c => c.user_id === userId);
+          }
+
+          if (cleanSql.includes('FROM subscriptions WHERE user_id = ?')) {
+            const userId = args[0];
+            let list = store.subscriptions.filter(s => s.user_id === userId);
+
+            let paramIdx = 1;
+            if (cleanSql.includes('(name LIKE ? OR notes LIKE ? OR website LIKE ?)')) {
+              const term = String(args[paramIdx]).replace(/%/g, '').toLowerCase();
+              paramIdx += 3;
+              list = list.filter(s =>
+                s.name.toLowerCase().includes(term) ||
+                (s.notes || '').toLowerCase().includes(term) ||
+                (s.website || '').toLowerCase().includes(term)
+              );
+            }
+
+            if (cleanSql.includes('AND category = ?')) {
+              const cat = args[paramIdx++];
+              list = list.filter(s => s.category === cat);
+            }
+
+            if (cleanSql.includes('AND status = ?')) {
+              const stat = args[paramIdx++];
+              list = list.filter(s => s.status === stat);
+            }
+
+            if (cleanSql.includes('AND billing_cycle = ?')) {
+              const cycle = args[paramIdx++];
+              list = list.filter(s => s.billing_cycle === cycle);
+            }
+
+            if (cleanSql.includes('AND payment_method = ?')) {
+              const pm = args[paramIdx++];
+              list = list.filter(s => s.payment_method === pm);
+            }
+
+            const isDesc = cleanSql.includes('DESC');
+            if (cleanSql.includes('ORDER BY price')) {
+              list.sort((a, b) => (isDesc ? b.price - a.price : a.price - b.price));
+            } else if (cleanSql.includes('ORDER BY name')) {
+              list.sort((a, b) => (isDesc ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name)));
+            } else if (cleanSql.includes('ORDER BY start_date')) {
+              list.sort((a, b) => {
+                const diff = new Date(a.start_date).getTime() - new Date(b.start_date).getTime();
+                return isDesc ? -diff : diff;
+              });
+            } else {
+              list.sort((a, b) => {
+                const diff = new Date(a.next_billing_date).getTime() - new Date(b.next_billing_date).getTime();
+                return isDesc ? -diff : diff;
+              });
+            }
+
+            return list.map(s => ({ ...s }));
+          }
+
+          return [];
+        },
+
+        run: (...params: any[]) => {
+          let changes = 0;
+
+          if (cleanSql.includes('INSERT INTO users')) {
+            const [id, name, email, password_hash, currency, theme = 'system'] = params;
+            store.users.push({
+              id,
+              name,
+              email: email.toLowerCase().trim(),
+              password_hash,
+              currency,
+              theme,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+            changes = 1;
+            save();
+            return { changes };
+          }
+
+          if (cleanSql.includes('UPDATE users SET')) {
+            const userId = params[params.length - 1];
+            const user = store.users.find(u => u.id === userId);
+            if (user) {
+              if (cleanSql.includes('name = ?')) {
+                const nameIdx = cleanSql.split('?').findIndex(part => part.includes('name ='));
+                if (nameIdx >= 0) user.name = params[nameIdx];
+              }
+              if (cleanSql.includes('currency = ?')) {
+                const currIdx = cleanSql.split('?').findIndex(part => part.includes('currency ='));
+                if (currIdx >= 0) user.currency = params[currIdx];
+              }
+              if (cleanSql.includes('theme = ?')) {
+                const themeIdx = cleanSql.split('?').findIndex(part => part.includes('theme ='));
+                if (themeIdx >= 0) user.theme = params[themeIdx];
+              }
+              user.updated_at = new Date().toISOString();
+              changes = 1;
+              save();
+            }
+            return { changes };
+          }
+
+          if (cleanSql.includes('INSERT INTO subscriptions')) {
+            if (params.length === 1 && typeof params[0] === 'object') {
+              const obj = params[0];
+              const record = {
+                id: obj.id || obj['@id'],
+                user_id: obj.user_id || obj['@user_id'],
+                name: obj.name || obj['@name'],
+                category: obj.category || obj['@category'],
+                price: Number(obj.price ?? obj['@price']),
+                currency: obj.currency || obj['@currency'] || 'USD',
+                billing_cycle: obj.billing_cycle || obj['@billing_cycle'],
+                payment_method: obj.payment_method || obj['@payment_method'],
+                start_date: obj.start_date || obj['@start_date'],
+                next_billing_date: obj.next_billing_date || obj['@next_billing_date'],
+                status: obj.status || obj['@status'] || 'active',
+                notes: obj.notes || obj['@notes'] || '',
+                website: obj.website || obj['@website'] || '',
+                logo: obj.logo || obj['@logo'] || '',
+                color: obj.color || obj['@color'] || '#4F46E5',
+                reminder_days: Number(obj.reminder_days ?? obj['@reminder_days'] ?? 3),
+                auto_renew: Number(obj.auto_renew ?? obj['@auto_renew'] ?? 1),
+                cancellation_url: obj.cancellation_url || obj['@cancellation_url'] || '',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              };
+              store.subscriptions.push(record);
+              changes = 1;
+              save();
+              return { changes };
+            } else {
+              const [
+                id, user_id, name, category, price, currency, billing_cycle,
+                payment_method, start_date, next_billing_date, status, notes,
+                website, logo, color, reminder_days, auto_renew, cancellation_url
+              ] = params;
+
+              store.subscriptions.push({
+                id,
+                user_id,
+                name,
+                category,
+                price: Number(price),
+                currency,
+                billing_cycle,
+                payment_method,
+                start_date,
+                next_billing_date,
+                status,
+                notes: notes || '',
+                website: website || '',
+                logo: logo || '',
+                color: color || '#4F46E5',
+                reminder_days: Number(reminder_days ?? 3),
+                auto_renew: Number(auto_renew ?? 1),
+                cancellation_url: cancellation_url || '',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              });
+              changes = 1;
+              save();
+              return { changes };
+            }
+          }
+
+          if (cleanSql.includes('UPDATE subscriptions SET')) {
+            if (cleanSql.includes('next_billing_date = ?, status = \'active\'')) {
+              const [nextBilling, subId] = params;
+              const sub = store.subscriptions.find(s => s.id === subId);
+              if (sub) {
+                sub.next_billing_date = nextBilling;
+                sub.status = 'active';
+                sub.updated_at = new Date().toISOString();
+                changes = 1;
+                save();
+              }
+              return { changes };
+            }
+
+            if (cleanSql.includes('status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')) {
+              const [status, subId, userId] = params;
+              const sub = store.subscriptions.find(s => s.id === subId && s.user_id === userId);
+              if (sub) {
+                sub.status = status;
+                sub.updated_at = new Date().toISOString();
+                changes = 1;
+                save();
+              }
+              return { changes };
+            }
+
+            const subId = params[params.length - 2];
+            const userId = params[params.length - 1];
+            const sub = store.subscriptions.find(s => s.id === subId && s.user_id === userId);
+            if (sub) {
+              const [
+                name, category, price, currency, billing_cycle,
+                payment_method, start_date, next_billing_date, status,
+                notes, website, logo, color, reminder_days, auto_renew, cancellation_url
+              ] = params;
+
+              Object.assign(sub, {
+                name,
+                category,
+                price: Number(price),
+                currency,
+                billing_cycle,
+                payment_method,
+                start_date,
+                next_billing_date,
+                status,
+                notes: notes || '',
+                website: website || '',
+                logo: logo || '',
+                color: color || '#4F46E5',
+                reminder_days: Number(reminder_days ?? 3),
+                auto_renew: Number(auto_renew ?? 1),
+                cancellation_url: cancellation_url || '',
+                updated_at: new Date().toISOString(),
+              });
+              changes = 1;
+              save();
+            }
+            return { changes };
+          }
+
+          if (cleanSql.includes('DELETE FROM subscriptions WHERE id = ? AND user_id = ?')) {
+            const [subId, userId] = params;
+            const before = store.subscriptions.length;
+            store.subscriptions = store.subscriptions.filter(s => !(s.id === subId && s.user_id === userId));
+            store.payment_history = store.payment_history.filter(p => p.subscription_id !== subId);
+            changes = before - store.subscriptions.length;
+            save();
+            return { changes };
+          }
+
+          if (cleanSql.includes('DELETE FROM subscriptions WHERE user_id = ?')) {
+            const userId = params[0];
+            const before = store.subscriptions.length;
+            store.subscriptions = store.subscriptions.filter(s => s.user_id !== userId);
+            changes = before - store.subscriptions.length;
+            save();
+            return { changes };
+          }
+
+          if (cleanSql.includes('INSERT INTO payment_history')) {
+            const [id, user_id, subscription_id, amount, currency, billing_date, payment_method, status = 'paid'] = params;
+            store.payment_history.push({
+              id,
+              user_id,
+              subscription_id,
+              amount: Number(amount),
+              currency,
+              billing_date,
+              payment_method,
+              status,
+              created_at: new Date().toISOString(),
+            });
+            changes = 1;
+            save();
+            return { changes };
+          }
+
+          if (cleanSql.includes('INSERT INTO categories')) {
+            const [id, user_id, name, icon, color] = params;
+            store.categories.push({
+              id,
+              user_id,
+              name,
+              icon,
+              color,
+              created_at: new Date().toISOString(),
+            });
+            changes = 1;
+            save();
+            return { changes };
+          }
+
+          return { changes: 0 };
+        },
+      };
+    },
+  };
+}
+
+let dbInstance: any = null;
+
+if (!process.env.VERCEL) {
+  try {
+    const Database = require('better-sqlite3');
+    const dataDir = path.resolve(__dirname, 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    const dbPath = path.join(dataDir, 'subscriptions.db');
+    const nativeDb = new Database(dbPath);
+    nativeDb.pragma('journal_mode = WAL');
+    nativeDb.pragma('foreign_keys = ON');
+    dbInstance = nativeDb;
+  } catch (err) {
+    console.warn('Native better-sqlite3 not available, using universal JS DB:', err);
+  }
+}
+
+if (!dbInstance) {
+  const tmpFile = process.env.VERCEL ? path.join('/tmp', 'subtrack_db.json') : undefined;
+  dbInstance = createUniversalJsDb(tmpFile);
+}
+
+export const db = dbInstance;
 
 export function initDatabase() {
   db.exec(`
@@ -47,11 +447,11 @@ export function initDatabase() {
       category TEXT NOT NULL,
       price REAL NOT NULL,
       currency TEXT NOT NULL DEFAULT 'USD',
-      billing_cycle TEXT NOT NULL, -- 'weekly', 'monthly', 'quarterly', 'semi_annual', 'yearly', 'lifetime'
-      payment_method TEXT NOT NULL, -- 'credit_card', 'debit_card', 'paypal', 'apple_pay', 'google_pay', 'bank_transfer', 'crypto', 'other'
+      billing_cycle TEXT NOT NULL,
+      payment_method TEXT NOT NULL,
       start_date TEXT NOT NULL,
       next_billing_date TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active', -- 'active', 'paused', 'cancelled', 'trial'
+      status TEXT NOT NULL DEFAULT 'active',
       notes TEXT,
       website TEXT,
       logo TEXT,
@@ -60,8 +460,7 @@ export function initDatabase() {
       auto_renew INTEGER DEFAULT 1,
       cancellation_url TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS payment_history (
@@ -73,14 +472,8 @@ export function initDatabase() {
       billing_date TEXT NOT NULL,
       payment_method TEXT,
       status TEXT NOT NULL DEFAULT 'paid',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE CASCADE
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-
-    CREATE INDEX IF NOT EXISTS idx_subs_user ON subscriptions(user_id);
-    CREATE INDEX IF NOT EXISTS idx_subs_next_billing ON subscriptions(next_billing_date);
-    CREATE INDEX IF NOT EXISTS idx_history_sub ON payment_history(subscription_id);
   `);
 
   seedDemoUser();
@@ -145,7 +538,7 @@ export function seedSubscriptionsForUser(userId: string) {
       billing_cycle: 'monthly',
       payment_method: 'credit_card',
       start_date: subMonths(today, 14),
-      next_billing_date: addDays(today, 2), // Renewing soon!
+      next_billing_date: addDays(today, 2),
       status: 'active',
       notes: '4K Ultra HD 4-screen family plan',
       website: 'https://netflix.com',
@@ -165,7 +558,7 @@ export function seedSubscriptionsForUser(userId: string) {
       billing_cycle: 'monthly',
       payment_method: 'paypal',
       start_date: subMonths(today, 24),
-      next_billing_date: addDays(today, 5), // Renewing soon!
+      next_billing_date: addDays(today, 5),
       status: 'active',
       notes: 'Shared with household members',
       website: 'https://spotify.com',
@@ -286,7 +679,7 @@ export function seedSubscriptionsForUser(userId: string) {
       payment_method: 'apple_pay',
       start_date: subMonths(today, 4),
       next_billing_date: addDays(today, 15),
-      status: 'paused', // Demonstrates paused status
+      status: 'paused',
       notes: 'Paused during recovery month',
       website: 'https://strava.com',
       logo: 'https://web-assets.strava.com/favicons/favicon.ico',
@@ -306,7 +699,7 @@ export function seedSubscriptionsForUser(userId: string) {
       payment_method: 'credit_card',
       start_date: addDays(today, -20),
       next_billing_date: addDays(today, 10),
-      status: 'trial', // Free trial expiring soon!
+      status: 'trial',
       notes: '30-day free trial. Decide whether to keep or cancel before day 30.',
       website: 'https://audible.com',
       logo: 'https://www.audible.com/favicon.ico',
@@ -354,10 +747,9 @@ export function seedSubscriptionsForUser(userId: string) {
     VALUES (?, ?, ?, ?, ?, ?, ?, 'paid')
   `);
 
-  const insertMany = db.transaction((subs) => {
+  const insertMany = db.transaction((subs: any[]) => {
     for (const sub of subs) {
       stmt.run(sub);
-      // Seed an initial payment history record
       historyStmt.run(
         `hist-${sub.id}-1`,
         userId,

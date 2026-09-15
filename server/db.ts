@@ -392,31 +392,18 @@ export function createUniversalJsDb(storageFile?: string) {
   };
 }
 
-let dbInstance: any = null;
+const storagePath = process.env.VERCEL
+  ? path.join('/tmp', 'subtrack_db.json')
+  : path.join(__dirname, 'data', 'subscriptions.json');
 
-if (!process.env.VERCEL) {
+const dir = path.dirname(storagePath);
+if (!fs.existsSync(dir)) {
   try {
-    const Database = require('better-sqlite3');
-    const dataDir = path.resolve(__dirname, 'data');
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    const dbPath = path.join(dataDir, 'subscriptions.db');
-    const nativeDb = new Database(dbPath);
-    nativeDb.pragma('journal_mode = WAL');
-    nativeDb.pragma('foreign_keys = ON');
-    dbInstance = nativeDb;
-  } catch (err) {
-    console.warn('Native better-sqlite3 not available, using universal JS DB:', err);
-  }
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {}
 }
 
-if (!dbInstance) {
-  const tmpFile = process.env.VERCEL ? path.join('/tmp', 'subtrack_db.json') : undefined;
-  dbInstance = createUniversalJsDb(tmpFile);
-}
-
-export const db = dbInstance;
+export const db = createUniversalJsDb(storagePath);
 
 export function initDatabase() {
   db.exec(`

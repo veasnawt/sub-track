@@ -23,7 +23,7 @@ try {
 app.use(cors());
 app.use(express.json());
 
-// API Routes - mount both with /api and without /api in case Vercel rewrites strip prefix
+// API Routes - mounted for both /api/* and direct /*
 app.use('/api/auth', authRouter);
 app.use('/auth', authRouter);
 
@@ -37,33 +37,39 @@ app.use('/api/categories', categoriesRouter);
 app.use('/categories', categoriesRouter);
 
 // Health check endpoint
-app.get(['/api/health', '/health'], (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
+app.get(['/api/health', '/health', '/api', '/api/'], (req, res) => {
+  res.json({ status: 'ok', service: 'SubTrack API', time: new Date().toISOString() });
 });
 
-// In production / standalone, serve frontend build
-const distPath = path.resolve(__dirname, '../dist');
-app.use(express.static(distPath));
+// In local standalone mode (not Vercel), serve built static frontend assets
+if (!process.env.VERCEL) {
+  const distPath = path.resolve(__dirname, '../dist');
+  app.use(express.static(distPath));
 
-// Fallback for client-side routing
-app.use((req, res) => {
-  if (req.path.startsWith('/api')) {
-    return res.status(404).json({ success: false, error: `Endpoint ${req.path} not found` });
-  }
-  const indexHtml = path.join(distPath, 'index.html');
-  res.sendFile(indexHtml, (err) => {
-    if (err) {
-      res.status(200).send(`
-        <html>
-          <body style="font-family:sans-serif;padding:2rem;text-align:center;">
-            <h2>SubTrack Server is running!</h2>
-            <p>Vite dev server runs at <a href="http://localhost:3000">http://localhost:3000</a></p>
-          </body>
-        </html>
-      `);
+  app.use((req, res) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/auth')) {
+      return res.status(404).json({ success: false, error: `Endpoint ${req.path} not found` });
     }
+    const indexHtml = path.join(distPath, 'index.html');
+    res.sendFile(indexHtml, (err) => {
+      if (err) {
+        res.status(200).send(`
+          <html>
+            <body style="font-family:sans-serif;padding:2rem;text-align:center;">
+              <h2>SubTrack Server is running!</h2>
+              <p>Vite dev server runs at <a href="http://localhost:3000">http://localhost:3000</a></p>
+            </body>
+          </html>
+        `);
+      }
+    });
   });
-});
+} else {
+  // In Vercel serverless mode, all unmatched requests to Express return clean JSON 404
+  app.use((req, res) => {
+    res.status(404).json({ success: false, error: `Endpoint ${req.path} not found` });
+  });
+}
 
 // Global Error Handler
 app.use((err: any, req: any, res: any, next: any) => {

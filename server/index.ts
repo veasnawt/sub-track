@@ -23,6 +23,24 @@ try {
 app.use(cors());
 app.use(express.json());
 
+// Path Normalizer: Ensures Vercel Serverless Rewrites preserve subpaths
+app.use((req, res, next) => {
+  if (req.query && req.query.match) {
+    const subpath = Array.isArray(req.query.match) ? req.query.match.join('/') : String(req.query.match);
+    if (subpath) {
+      const qIndex = req.url.indexOf('?');
+      const search = qIndex !== -1 ? req.url.substring(qIndex) : '';
+      req.url = `/api/${subpath}${search}`;
+    }
+  } else {
+    const matched = (req.headers['x-matched-path'] as string) || (req.headers['x-now-route-matches'] as string);
+    if (matched && matched.startsWith('/api') && (req.url === '/api' || req.url === '/' || req.url === '')) {
+      req.url = matched;
+    }
+  }
+  next();
+});
+
 // API Routes - mounted for both /api/* and direct /*
 app.use('/api/auth', authRouter);
 app.use('/auth', authRouter);

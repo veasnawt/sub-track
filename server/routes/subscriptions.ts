@@ -11,7 +11,10 @@ router.use(authMiddleware);
 const SubscriptionSchema = z.object({
   name: z.string().min(1, 'Service name is required'),
   category: z.string().min(1, 'Category is required'),
-  price: z.number().positive('Price must be greater than 0'),
+  price: z.preprocess(
+    (val) => (typeof val === 'string' ? parseFloat(val) : val),
+    z.number().positive('Price must be greater than 0')
+  ),
   currency: z.string().default('USD'),
   billing_cycle: z.enum(['weekly', 'monthly', 'quarterly', 'semi_annual', 'yearly', 'lifetime']),
   payment_method: z.string().default('credit_card'),
@@ -22,8 +25,14 @@ const SubscriptionSchema = z.object({
   website: z.string().optional().default(''),
   logo: z.string().optional().default(''),
   color: z.string().optional().default('#4F46E5'),
-  reminder_days: z.number().int().min(0).max(90).default(3),
-  auto_renew: z.number().int().min(0).max(1).default(1),
+  reminder_days: z.preprocess(
+    (val) => (typeof val === 'string' ? parseInt(val, 10) : val),
+    z.number().int().min(0).max(90).default(3)
+  ),
+  auto_renew: z.preprocess(
+    (val) => (typeof val === 'boolean' ? (val ? 1 : 0) : typeof val === 'string' ? (val === 'true' || val === '1' ? 1 : 0) : typeof val === 'number' ? val : 1),
+    z.number().int().min(0).max(1).default(1)
+  ),
   cancellation_url: z.string().optional().default(''),
 });
 

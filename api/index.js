@@ -1031,7 +1031,10 @@ router2.use(authMiddleware);
 var SubscriptionSchema = z2.object({
   name: z2.string().min(1, "Service name is required"),
   category: z2.string().min(1, "Category is required"),
-  price: z2.number().positive("Price must be greater than 0"),
+  price: z2.preprocess(
+    (val) => typeof val === "string" ? parseFloat(val) : val,
+    z2.number().positive("Price must be greater than 0")
+  ),
   currency: z2.string().default("USD"),
   billing_cycle: z2.enum(["weekly", "monthly", "quarterly", "semi_annual", "yearly", "lifetime"]),
   payment_method: z2.string().default("credit_card"),
@@ -1042,8 +1045,14 @@ var SubscriptionSchema = z2.object({
   website: z2.string().optional().default(""),
   logo: z2.string().optional().default(""),
   color: z2.string().optional().default("#4F46E5"),
-  reminder_days: z2.number().int().min(0).max(90).default(3),
-  auto_renew: z2.number().int().min(0).max(1).default(1),
+  reminder_days: z2.preprocess(
+    (val) => typeof val === "string" ? parseInt(val, 10) : val,
+    z2.number().int().min(0).max(90).default(3)
+  ),
+  auto_renew: z2.preprocess(
+    (val) => typeof val === "boolean" ? val ? 1 : 0 : typeof val === "string" ? val === "true" || val === "1" ? 1 : 0 : typeof val === "number" ? val : 1,
+    z2.number().int().min(0).max(1).default(1)
+  ),
   cancellation_url: z2.string().optional().default("")
 });
 function calculateDaysDifference(targetDateStr) {

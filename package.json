@@ -5,10 +5,10 @@
   "main": "index.js",
   "scripts": {
     "dev": "concurrently -k -n \"SERVER,CLIENT\" -c \"cyan,magenta\" \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:server": "tsx watch server/index.ts",
+    "dev:server": "tsx watch server/standalone.ts",
     "dev:client": "vite",
     "build": "vite build",
-    "start": "tsx server/index.ts"
+    "start": "tsx server/standalone.ts"
   },
   "keywords": [],
   "author": "",

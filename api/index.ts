@@ -1,23 +1,10 @@
 import app from '../server/index';
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+export default app;
 
-const handler = (req: any, res: any) => {
-  return app(req, res);
-};
-
-export default handler;
-
-// Ensure compatibility with both ESM and CommonJS runtimes on Vercel
 try {
   // @ts-ignore
-  module.exports = handler;
+  module.exports = app;
   // @ts-ignore
-  module.exports.default = handler;
-  // @ts-ignore
-  module.exports.config = config;
+  module.exports.default = app;
 } catch (e) {}

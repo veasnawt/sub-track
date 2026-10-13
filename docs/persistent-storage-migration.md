@@ -4,7 +4,7 @@
 `server/db.ts` uses a process-local JavaScript store, serialized to `/tmp/subtrack_db.json` on Vercel. This cannot guarantee persistence across invocations or instances. The current synchronous `db.prepare(...).get/all/run` interface is not compatible with PostgreSQL's asynchronous client without a backend refactor.
 
 ## Database schema
-Run `supabase/migrations/001_initial_schema.sql` in your Supabase project's SQL Editor. This creates user-owned subscription, category and payment tables. Row-level security is enabled; the existing app uses its own JWT authentication, so **server-side PostgreSQL access is required**. Do not use a public anon key to query these tables.
+Use the existing **pinly-content-machine** Supabase project. Run `supabase/migrations/001_initial_schema.sql` in that project's SQL Editor. All tables use the `subtrack_` prefix to avoid colliding with Pinly's tables. This creates user-owned subscription, category and payment tables. Row-level security is enabled; the existing app uses its own JWT authentication, so **server-side PostgreSQL access is required**. Do not use a public anon key to query these tables.
 
 ## Remaining implementation work before deployment
 1. Add a server-only PostgreSQL connection pool using a `DATABASE_URL` secret, with TLS as required by the provider.

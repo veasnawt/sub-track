@@ -1,14 +1,15 @@
 import { Router } from 'express';
-import { db, DEFAULT_CATEGORIES } from '../db';
+import { db } from '../db';
+import { DEFAULT_CATEGORIES } from '../../src/lib/categories';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth';
 import crypto from 'crypto';
 
 const router = Router();
 router.use(authMiddleware);
 
-router.get('/', (req: AuthenticatedRequest, res) => {
+router.get('/', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
-  const userCategories = db.prepare('SELECT * FROM categories WHERE user_id = ?').all(userId) as any[];
+  const userCategories = await db.prepare('SELECT * FROM public.subtrack_categories WHERE user_id = ?').all(userId) as any[];
 
   // Merge default categories with user categories
   const allCategories = [
@@ -22,7 +23,7 @@ router.get('/', (req: AuthenticatedRequest, res) => {
   });
 });
 
-router.post('/', (req: AuthenticatedRequest, res) => {
+router.post('/', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
   const { name, icon = 'Tag', color = '#6366F1' } = req.body;
 
@@ -31,12 +32,12 @@ router.post('/', (req: AuthenticatedRequest, res) => {
   }
 
   const catId = `cat-${crypto.randomUUID()}`;
-  db.prepare(`
-    INSERT INTO categories (id, user_id, name, icon, color)
+  await db.prepare(`
+    INSERT INTO public.subtrack_categories (id, user_id, name, icon, color)
     VALUES (?, ?, ?, ?, ?)
   `).run(catId, userId, name.trim(), icon, color);
 
-  const created = db.prepare('SELECT * FROM categories WHERE id = ?').get(catId);
+  const created = await db.prepare('SELECT * FROM public.subtrack_categories WHERE id = ?').get(catId);
 
   return res.status(201).json({
     success: true,

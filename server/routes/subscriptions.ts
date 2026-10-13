@@ -73,12 +73,12 @@ export function advanceBillingDate(currentDateStr: string, cycle: string): strin
 }
 
 // GET /api/subscriptions
-router.get('/', (req: AuthenticatedRequest, res) => {
+router.get('/', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
   const userCurrency = req.user!.currency || 'USD';
   const { search, category, status, billing_cycle, payment_method, sort_by = 'next_billing_date', sort_order = 'asc' } = req.query;
 
-  let query = `SELECT * FROM subscriptions WHERE user_id = ?`;
+  let query = `SELECT * FROM public.subtrack_subscriptions WHERE user_id = ?`;
   const params: any[] = [userId];
 
   if (search && typeof search === 'string' && search.trim() !== '') {
@@ -119,7 +119,7 @@ router.get('/', (req: AuthenticatedRequest, res) => {
 
   query += ` ORDER BY ${sortCol} ${direction}`;
 
-  const rows = db.prepare(query).all(...params) as any[];
+  const rows = await db.prepare(query).all(...params) as any[];
 
   const subscriptions = rows.map((sub) => {
     const daysUntil = calculateDaysDifference(sub.next_billing_date);
@@ -145,15 +145,15 @@ router.get('/', (req: AuthenticatedRequest, res) => {
 });
 
 // GET /api/subscriptions/:id
-router.get('/:id', (req: AuthenticatedRequest, res) => {
+router.get('/:id', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
-  const sub = db.prepare('SELECT * FROM subscriptions WHERE id = ? AND user_id = ?').get(req.params.id, userId) as any;
+  const sub = await db.prepare('SELECT * FROM public.subtrack_subscriptions WHERE id = ? AND user_id = ?').get(req.params.id, userId) as any;
 
   if (!sub) {
     return res.status(404).json({ success: false, error: 'Subscription not found' });
   }
 
-  const history = db.prepare('SELECT * FROM payment_history WHERE subscription_id = ? ORDER BY billing_date DESC').all(sub.id);
+  const history = await db.prepare('SELECT * FROM public.subtrack_payment_history WHERE subscription_id = ? ORDER BY billing_date DESC').all(sub.id);
 
   return res.json({
     success: true,
@@ -166,7 +166,7 @@ router.get('/:id', (req: AuthenticatedRequest, res) => {
 });
 
 // POST /api/subscriptions
-router.post('/', (req: AuthenticatedRequest, res) => {
+router.post('/', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
   const parseResult = SubscriptionSchema.safeParse(req.body);
 
@@ -180,8 +180,9 @@ router.post('/', (req: AuthenticatedRequest, res) => {
   const data = parseResult.data;
   const subId = `sub-${crypto.randomUUID()}`;
 
-  db.prepare(`
-    INSERT INTO subscriptions (
+  await db.transaction(async () => {
+  await db.prepare(`
+    INSERT INTO public.subtrack_subscriptions (
       id, user_id, name, category, price, currency, billing_cycle,
       payment_method, start_date, next_billing_date, status, notes,
       website, logo, color, reminder_days, auto_renew, cancellation_url
@@ -212,8 +213,8 @@ router.post('/', (req: AuthenticatedRequest, res) => {
   );
 
   // Add initial payment history entry
-  db.prepare(`
-    INSERT INTO payment_history (id, user_id, subscription_id, amount, currency, billing_date, payment_method, status)
+  await db.prepare(`
+    INSERT INTO public.subtrack_payment_history (id, user_id, subscription_id, amount, currency, billing_date, payment_method, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'paid')
   `).run(
     `hist-${crypto.randomUUID()}`,
@@ -225,7 +226,9 @@ router.post('/', (req: AuthenticatedRequest, res) => {
     data.payment_method
   );
 
-  const created = db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subId);
+  })();
+
+  const created = await db.prepare('SELECT * FROM public.subtrack_subscriptions WHERE id = ?').get(subId);
 
   return res.status(201).json({
     success: true,
@@ -235,11 +238,11 @@ router.post('/', (req: AuthenticatedRequest, res) => {
 });
 
 // PUT /api/subscriptions/:id
-router.put('/:id', (req: AuthenticatedRequest, res) => {
+router.put('/:id', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
   const subId = req.params.id;
 
-  const existing = db.prepare('SELECT * FROM subscriptions WHERE id = ? AND user_id = ?').get(subId, userId);
+  const existing = await db.prepare('SELECT * FROM public.subtrack_subscriptions WHERE id = ? AND user_id = ?').get(subId, userId);
   if (!existing) {
     return res.status(404).json({ success: false, error: 'Subscription not found' });
   }
@@ -254,8 +257,8 @@ router.put('/:id', (req: AuthenticatedRequest, res) => {
 
   const data = parseResult.data;
 
-  db.prepare(`
-    UPDATE subscriptions SET
+  await db.prepare(`
+    UPDATE public.subtrack_subscriptions SET
       name = ?,
       category = ?,
       price = ?,
@@ -295,7 +298,7 @@ router.put('/:id', (req: AuthenticatedRequest, res) => {
     userId
   );
 
-  const updated = db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subId);
+  const updated = await db.prepare('SELECT * FROM public.subtrack_subscriptions WHERE id = ?').get(subId);
 
   return res.json({
     success: true,
@@ -305,11 +308,11 @@ router.put('/:id', (req: AuthenticatedRequest, res) => {
 });
 
 // DELETE /api/subscriptions/:id
-router.delete('/:id', (req: AuthenticatedRequest, res) => {
+router.delete('/:id', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
   const subId = req.params.id;
 
-  const result = db.prepare('DELETE FROM subscriptions WHERE id = ? AND user_id = ?').run(subId, userId);
+  const result = await db.prepare('DELETE FROM public.subtrack_subscriptions WHERE id = ? AND user_id = ?').run(subId, userId);
   if (result.changes === 0) {
     return res.status(404).json({ success: false, error: 'Subscription not found' });
   }
@@ -321,20 +324,21 @@ router.delete('/:id', (req: AuthenticatedRequest, res) => {
 });
 
 // POST /api/subscriptions/:id/renew - Marks as paid/renewed and advances billing date!
-router.post('/:id/renew', (req: AuthenticatedRequest, res) => {
+router.post('/:id/renew', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
   const subId = req.params.id;
 
-  const sub = db.prepare('SELECT * FROM subscriptions WHERE id = ? AND user_id = ?').get(subId, userId) as any;
+  const nextBilling = await db.transaction(async () => {
+  const sub = await db.prepare('SELECT * FROM public.subtrack_subscriptions WHERE id = ? AND user_id = ? FOR UPDATE').get(subId, userId) as any;
   if (!sub) {
-    return res.status(404).json({ success: false, error: 'Subscription not found' });
+    return undefined;
   }
 
   const nextBilling = advanceBillingDate(sub.next_billing_date, sub.billing_cycle);
 
   // Record payment in payment_history
-  db.prepare(`
-    INSERT INTO payment_history (id, user_id, subscription_id, amount, currency, billing_date, payment_method, status)
+  await db.prepare(`
+    INSERT INTO public.subtrack_payment_history (id, user_id, subscription_id, amount, currency, billing_date, payment_method, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'paid')
   `).run(
     `hist-${crypto.randomUUID()}`,
@@ -347,15 +351,19 @@ router.post('/:id/renew', (req: AuthenticatedRequest, res) => {
   );
 
   // Update next billing date and ensure status is active
-  db.prepare(`
-    UPDATE subscriptions SET
+  await db.prepare(`
+    UPDATE public.subtrack_subscriptions SET
       next_billing_date = ?,
       status = 'active',
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(nextBilling, subId);
 
-  const updated = db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subId);
+  return nextBilling;
+  })();
+  if (nextBilling === undefined) return res.status(404).json({ success: false, error: 'Subscription not found' });
+
+  const updated = await db.prepare('SELECT * FROM public.subtrack_subscriptions WHERE id = ?').get(subId);
 
   return res.json({
     success: true,
@@ -365,7 +373,7 @@ router.post('/:id/renew', (req: AuthenticatedRequest, res) => {
 });
 
 // POST /api/subscriptions/:id/toggle-status
-router.post('/:id/toggle-status', (req: AuthenticatedRequest, res) => {
+router.post('/:id/toggle-status', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
   const subId = req.params.id;
   const { status } = req.body;
@@ -375,8 +383,8 @@ router.post('/:id/toggle-status', (req: AuthenticatedRequest, res) => {
     return res.status(400).json({ success: false, error: 'Invalid status' });
   }
 
-  const result = db.prepare(`
-    UPDATE subscriptions SET
+  const result = await db.prepare(`
+    UPDATE public.subtrack_subscriptions SET
       status = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND user_id = ?
@@ -386,7 +394,7 @@ router.post('/:id/toggle-status', (req: AuthenticatedRequest, res) => {
     return res.status(404).json({ success: false, error: 'Subscription not found' });
   }
 
-  const updated = db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subId);
+  const updated = await db.prepare('SELECT * FROM public.subtrack_subscriptions WHERE id = ?').get(subId);
 
   return res.json({
     success: true,
@@ -396,10 +404,12 @@ router.post('/:id/toggle-status', (req: AuthenticatedRequest, res) => {
 });
 
 // POST /api/subscriptions/reset-seed
-router.post('/reset-seed', (req: AuthenticatedRequest, res) => {
+router.post('/reset-seed', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
-  db.prepare('DELETE FROM subscriptions WHERE user_id = ?').run(userId);
-  seedSubscriptionsForUser(userId);
+  await db.transaction(async () => {
+    await db.prepare('DELETE FROM public.subtrack_subscriptions WHERE user_id = ?').run(userId);
+    await seedSubscriptionsForUser(userId);
+  })();
 
   return res.json({
     success: true,
@@ -408,7 +418,7 @@ router.post('/reset-seed', (req: AuthenticatedRequest, res) => {
 });
 
 // POST /api/subscriptions/import (CSV / JSON bulk import)
-router.post('/import', (req: AuthenticatedRequest, res) => {
+router.post('/import', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
   const { subscriptions: items } = req.body;
 
@@ -418,7 +428,7 @@ router.post('/import', (req: AuthenticatedRequest, res) => {
 
   let importedCount = 0;
   const insertStmt = db.prepare(`
-    INSERT INTO subscriptions (
+    INSERT INTO public.subtrack_subscriptions (
       id, user_id, name, category, price, currency, billing_cycle,
       payment_method, start_date, next_billing_date, status, notes,
       website, logo, color, reminder_days, auto_renew, cancellation_url
@@ -429,11 +439,11 @@ router.post('/import', (req: AuthenticatedRequest, res) => {
     )
   `);
 
-  const tx = db.transaction((subs: any[]) => {
+  const tx = db.transaction(async (subs: any[]) => {
     for (const item of subs) {
       if (!item.name || !item.price) continue;
       const subId = `sub-${crypto.randomUUID()}`;
-      insertStmt.run(
+      await insertStmt.run(
         subId,
         userId,
         String(item.name).trim(),
@@ -457,7 +467,7 @@ router.post('/import', (req: AuthenticatedRequest, res) => {
     }
   });
 
-  tx(items);
+  await tx(items);
 
   return res.json({
     success: true,

@@ -9,13 +9,17 @@ export function getPool(): Pool {
     throw new Error('DATABASE_URL is required for persistent Sub-Track storage');
   }
   if (!pool) {
+    const url = new URL(connectionString);
+    // URI SSL flags must not override certificate verification.
+    for (const key of ['sslmode', 'sslcert', 'sslkey', 'sslrootcert']) url.searchParams.delete(key);
     pool = new Pool({
-      connectionString,
+      connectionString: url.toString(),
+      ssl: { rejectUnauthorized: true },
       max: 5,
       connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 30000,
     });
-    pool.on('error', (error) => console.error('PostgreSQL idle connection error:', error));
+    pool.on('error', () => console.error('PostgreSQL connection unavailable'));
   }
   return pool;
 }

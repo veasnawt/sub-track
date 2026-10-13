@@ -21,7 +21,7 @@ const LoginSchema = z.object({
   password: z.string().min(1, 'Password is required'),
 });
 
-router.post('/register', (req, res) => {
+router.post('/register', async (req, res) => {
   try {
     const result = RegisterSchema.safeParse(req.body);
     if (!result.success) {
@@ -34,7 +34,7 @@ router.post('/register', (req, res) => {
     const { name, email, password, currency, seedSamples } = result.data;
     const normalizedEmail = email.toLowerCase().trim();
 
-    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail);
+    const existing = await db.prepare('SELECT id FROM public.subtrack_users WHERE email = ?').get(normalizedEmail);
     if (existing) {
       return res.status(409).json({
         success: false,
@@ -47,14 +47,14 @@ router.post('/register', (req, res) => {
       : `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     const passwordHash = bcrypt.hashSync(password, 10);
 
-    db.prepare(`
-      INSERT INTO users (id, name, email, password_hash, currency)
+    await db.prepare(`
+      INSERT INTO public.subtrack_users (id, name, email, password_hash, currency)
       VALUES (?, ?, ?, ?, ?)
     `).run(userId, name.trim(), normalizedEmail, passwordHash, currency.toUpperCase());
 
     if (seedSamples) {
       try {
-        seedSubscriptionsForUser(userId);
+        await seedSubscriptionsForUser(userId);
       } catch (seedErr) {
         console.warn('Sample subscription seeding non-fatal error:', seedErr);
       }
@@ -75,15 +75,15 @@ router.post('/register', (req, res) => {
       user: userPayload,
     });
   } catch (err: any) {
-    console.error('Registration unhandled error:', err);
+    console.error('Registration failed', { code: err?.code });
     return res.status(500).json({
       success: false,
-      error: err?.message || 'Registration failed. Please try again.',
+      error: 'Registration failed. Please try again.',
     });
   }
 });
 
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   try {
     const result = LoginSchema.safeParse(req.body);
     if (!result.success) {
@@ -96,7 +96,7 @@ router.post('/login', (req, res) => {
     const { email, password } = result.data;
     const normalizedEmail = email.toLowerCase().trim();
 
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(normalizedEmail) as any;
+    const user = await db.prepare('SELECT * FROM public.subtrack_users WHERE email = ?').get(normalizedEmail) as any;
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -127,28 +127,28 @@ router.post('/login', (req, res) => {
       user: userPayload,
     });
   } catch (err: any) {
-    console.error('Login unhandled error:', err);
+    console.error('Login failed', { code: err?.code });
     return res.status(500).json({
       success: false,
-      error: err?.message || 'Login failed. Please try again.',
+      error: 'Login failed. Please try again.',
     });
   }
 });
 
-router.post('/demo', (req, res) => {
+router.post('/demo', async (req, res) => {
   try {
     const demoEmail = 'demo@subtrack.app';
-    let demoUser = db.prepare('SELECT * FROM users WHERE email = ?').get(demoEmail) as any;
+    let demoUser = await db.prepare('SELECT * FROM public.subtrack_users WHERE email = ?').get(demoEmail) as any;
 
     if (!demoUser) {
       const demoUserId = 'demo-user-id-001';
       const passwordHash = bcrypt.hashSync('demo1234', 10);
-      db.prepare(`
-        INSERT INTO users (id, name, email, password_hash, currency, theme)
+      await db.prepare(`
+        INSERT INTO public.subtrack_users (id, name, email, password_hash, currency, theme)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(demoUserId, 'Alex Taylor', demoEmail, passwordHash, 'USD', 'system');
       try {
-        seedSubscriptionsForUser(demoUserId);
+        await seedSubscriptionsForUser(demoUserId);
       } catch (seedErr) {
         console.warn('Demo subscription seeding non-fatal error:', seedErr);
       }
@@ -175,16 +175,16 @@ router.post('/demo', (req, res) => {
       user: userPayload,
     });
   } catch (err: any) {
-    console.error('Demo auth unhandled error:', err);
+    console.error('Demo login failed', { code: err?.code });
     return res.status(500).json({
       success: false,
-      error: err?.message || 'Demo login failed. Please try again.',
+      error: 'Demo login failed. Please try again.',
     });
   }
 });
 
-router.get('/me', authMiddleware, (req: AuthenticatedRequest, res) => {
-  const user = db.prepare('SELECT id, name, email, currency, theme, created_at FROM users WHERE id = ?').get(req.user!.userId) as any;
+router.get('/me', authMiddleware, async (req: AuthenticatedRequest, res) => {
+  const user = await db.prepare('SELECT id, name, email, currency, theme, created_at FROM public.subtrack_users WHERE id = ?').get(req.user!.userId) as any;
   if (!user) {
     return res.status(404).json({ success: false, error: 'User not found' });
   }
@@ -202,7 +202,7 @@ router.get('/me', authMiddleware, (req: AuthenticatedRequest, res) => {
   });
 });
 
-router.put('/me', authMiddleware, (req: AuthenticatedRequest, res) => {
+router.put('/me', authMiddleware, async (req: AuthenticatedRequest, res) => {
   const schema = z.object({
     name: z.string().min(2).optional(),
     currency: z.string().length(3).optional(),
@@ -234,10 +234,10 @@ router.put('/me', authMiddleware, (req: AuthenticatedRequest, res) => {
   if (updates.length > 0) {
     updates.push('updated_at = CURRENT_TIMESTAMP');
     values.push(req.user!.userId);
-    db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    await db.prepare(`UPDATE public.subtrack_users SET ${updates.join(', ')} WHERE id = ?`).run(...values);
   }
 
-  const updatedUser = db.prepare('SELECT id, name, email, currency, theme FROM users WHERE id = ?').get(req.user!.userId) as any;
+  const updatedUser = await db.prepare('SELECT id, name, email, currency, theme FROM public.subtrack_users WHERE id = ?').get(req.user!.userId) as any;
 
   return res.json({
     success: true,

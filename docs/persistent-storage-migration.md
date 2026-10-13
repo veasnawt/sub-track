@@ -16,3 +16,11 @@ Use the existing **pinly-content-machine** Supabase project. Run `supabase/migra
 7. Add integration tests for create/read/update/delete, multi-user isolation, and persistence after process restart.
 
 **This migration is schema-only so far. It does not fix production persistence until the backend migration is complete.**
+
+## Hosting setup for pinly-content-machine
+1. In Supabase > pinly-content-machine > Connect, copy the **Postgres connection string** (prefer the transaction pooler URL for Vercel/serverless). If the dashboard offers a URI with a password placeholder, substitute your database password privately.
+2. In the Sub-Track Vercel project, open Settings > Environment Variables and add `DATABASE_URL` for Production (and Preview if needed). Keep it server-only and sensitive; never use a `VITE_` prefix or paste it into GitHub.
+3. Configure a long random `JWT_SECRET` for the same environments. Changing this secret will invalidate old login tokens.
+4. After the backend migration is finished, redeploy and test saving a subscription, logging out/in, and retrieving it after a fresh deployment.
+
+The new `server/postgres.ts` helper and `pg` dependency are staged, **but existing routes still use the old temporary store**. Do not deploy this branch yet. Run `npm install` locally to regenerate `package-lock.json` before finalizing the PR.

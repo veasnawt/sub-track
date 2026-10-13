@@ -47,10 +47,11 @@ test('register, CRUD, isolation, renewal, import and persistence across API rest
   };
   try {
     assert.equal((await request('/health')).status, 200);
-    const a = await request('/auth/register', 'POST', { name: 'User One', email: 'one@example.test', password: 'test1234', seedSamples: false });
-    const b = await request('/auth/register', 'POST', { name: 'User Two', email: 'two@example.test', password: 'test1234', seedSamples: false });
+    const a = await request('/auth/register', 'POST', { name: 'User One', email: 'one@example.test', password: 'test1234' });
+    const b = await request('/auth/register', 'POST', { name: 'User Two', email: 'two@example.test', password: 'test1234' });
     assert.equal(a.status, 201); assert.equal(b.status, 201);
     const token = a.body.token;
+    assert.equal((await request('/subscriptions', 'GET', undefined, token)).body.count, 0);
     const created = await request('/subscriptions', 'POST', subscription, token);
     assert.equal(created.status, 201);
     assert.equal(created.body.data.price, 12.5);

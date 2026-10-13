@@ -22,7 +22,7 @@ export const AuthPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [currency, setCurrency] = useState('USD');
-  const [seedSamples, setSeedSamples] = useState(true);
+  const [seedSamples, setSeedSamples] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
@@ -256,7 +256,7 @@ export const AuthPage: React.FC = () => {
                     className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer"
                   />
                   <label htmlFor="seedCheck" className="text-xs text-slate-600 dark:text-slate-400 cursor-pointer">
-                    Pre-populate with realistic sample subscriptions
+                    Add demo subscriptions (optional; these are not your real bills)
                   </label>
                 </div>
               </>

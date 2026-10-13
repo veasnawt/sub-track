@@ -1,4 +1,5 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
+import { SUPABASE_CA } from './supabase-ca';
 
 // This module is server-only. DATABASE_URL must never use a VITE_ prefix.
 let pool: Pool | undefined;
@@ -14,7 +15,7 @@ export function getPool(): Pool {
     for (const key of ['sslmode', 'sslcert', 'sslkey', 'sslrootcert']) url.searchParams.delete(key);
     pool = new Pool({
       connectionString: url.toString(),
-      ssl: { rejectUnauthorized: true },
+      ssl: { rejectUnauthorized: true, ca: SUPABASE_CA },
       max: 5,
       connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 30000,

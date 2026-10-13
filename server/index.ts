@@ -11,13 +11,6 @@ dotenv.config();
 
 const app = express();
 
-// Initialize database schema safely
-try {
-  initDatabase();
-} catch (err) {
-  console.error('Database initialization warning:', err);
-}
-
 app.use(cors());
 
 // Body handling defense: if body was already parsed by Vercel serverless runtime or an edge layer, mark it so body-parser does not hang
@@ -53,9 +46,14 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check endpoint (accessible at /api/health, /health, /api)
-app.get(['/api/health', '/health', '/api', '/api/'], (req, res) => {
-  res.json({ status: 'ok', service: 'SubTrack API', time: new Date().toISOString() });
+// Database health and readiness must fail visibly rather than use temporary storage.
+app.get(['/api/health', '/health', '/api', '/api/'], async (_req, res) => {
+  try {
+    await initDatabase();
+    res.json({ status: 'ok', service: 'SubTrack API', storage: 'postgresql' });
+  } catch {
+    res.status(503).json({ status: 'unavailable', service: 'SubTrack API', storage: 'postgresql' });
+  }
 });
 
 // API Routes - mounted for both /api/* and direct /*
@@ -78,11 +76,11 @@ app.use((req, res) => {
 
 // Global Error Handler
 app.use((err: any, req: any, res: any, next: any) => {
-  console.error('Unhandled server error:', err);
+  console.error('Unhandled server error', { code: err?.code });
   if (!res.headersSent) {
     res.status(err?.status || err?.statusCode || 500).json({
       success: false,
-      error: err?.message || 'Internal Server Error',
+      error: 'Internal Server Error',
     });
   }
 });

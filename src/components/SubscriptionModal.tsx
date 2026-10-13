@@ -14,7 +14,7 @@ import {
 import { Subscription, BillingCycle, SubscriptionStatus, PaymentMethod } from '../types';
 import { POPULAR_PRESETS, SubscriptionPreset } from '../lib/presets';
 import { SUPPORTED_CURRENCIES } from '../lib/currency';
-import { DEFAULT_CATEGORIES } from '../../server/db'; // or locally defined
+import { DEFAULT_CATEGORIES } from '../lib/categories'; // or locally defined
 
 interface SubscriptionModalProps {
   isOpen: boolean;

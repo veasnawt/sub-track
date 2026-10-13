@@ -15,11 +15,11 @@ function calculateDaysDifference(targetDateStr: string): number {
 }
 
 // GET /api/analytics/summary
-router.get('/summary', (req: AuthenticatedRequest, res) => {
+router.get('/summary', async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.userId;
   const targetCurrency = req.user!.currency || 'USD';
 
-  const subscriptions = db.prepare('SELECT * FROM subscriptions WHERE user_id = ?').all(userId) as any[];
+  const subscriptions = await db.prepare('SELECT * FROM public.subtrack_subscriptions WHERE user_id = ?').all(userId) as any[];
 
   let totalMonthlySpend = 0;
   let totalYearlySpend = 0;

@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'subtrack-super-secure-key-2026-prod';
+export const JWT_SECRET = process.env.JWT_SECRET!;
+if (!JWT_SECRET || JWT_SECRET.length < 32) throw new Error('JWT_SECRET must be set to at least 32 random characters');
 
 export interface AuthUser {
   userId: string;

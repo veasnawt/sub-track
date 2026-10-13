@@ -1,7 +1,1 @@
-export default function handler(req: any, res: any) {
-  res.status(200).json({
-    status: 'ok',
-    service: 'SubTrack Health Check',
-    timestamp: new Date().toISOString(),
-  });
-}
+export { default } from '../server/index';

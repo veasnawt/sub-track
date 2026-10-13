@@ -18,7 +18,7 @@ pg.Pool.prototype.query = pool.query.bind(pool) as any;
 pg.Pool.prototype.connect = pool.connect.bind(pool) as any;
 const { default: app } = await import('../server/index');
 const { db, bindSQL } = await import('../server/db');
-const { getPool } = await import('../server/postgres');
+const { getPool, connectionURL } = await import('../server/postgres');
 
 async function serve() {
   const server = app.listen(0, '127.0.0.1');
@@ -87,4 +87,15 @@ test('transactions roll back and release on failure', async () => {
     await assert.rejects(db.transaction(async () => { throw new Error('forced failure'); })(), /forced failure/);
     assert.deepEqual(commands, ['BEGIN', 'ROLLBACK', 'RELEASE']);
   } finally { getPool().connect = original; }
+});
+
+
+test('direct project URI maps to the Vercel pooler without changing password', () => {
+  const url = connectionURL('postgresql://postgres:test%23value@db.hmluapddxfnimuqqmtpr.supabase.co:5432/postgres?sslmode=require');
+  assert.equal(url.hostname, 'aws-0-ap-northeast-1.pooler.supabase.com');
+  assert.equal(url.port, '6543');
+  assert.equal(url.username, 'postgres.hmluapddxfnimuqqmtpr');
+  assert.equal(url.password, 'test%23value');
+  assert.equal(url.searchParams.has('sslmode'), false);
+  assert.equal(connectionURL('postgresql://test:test@localhost/test').hostname, 'localhost');
 });

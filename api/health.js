@@ -14,14 +14,28 @@ var SUPABASE_CA = "-----BEGIN CERTIFICATE-----\nMIIDxDCCAqygAwIBAgIUbLxMod62P2kt
 
 // server/postgres.ts
 var pool;
+function connectionURL(input) {
+  const url = new URL(input.trim());
+  if (url.hostname === "db.hmluapddxfnimuqqmtpr.supabase.co") {
+    url.hostname = "aws-0-ap-northeast-1.pooler.supabase.com";
+    url.port = "6543";
+    url.username = "postgres.hmluapddxfnimuqqmtpr";
+  }
+  for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) url.searchParams.delete(key);
+  return url;
+}
 function getPool() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
     throw new Error("DATABASE_URL is required for persistent Sub-Track storage");
   }
   if (!pool) {
-    const url = new URL(connectionString);
-    for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) url.searchParams.delete(key);
+    const url = connectionURL(connectionString);
+    console.info("Database connection target", {
+      target: url.hostname === "aws-0-ap-northeast-1.pooler.supabase.com" ? "configured_supabase_pooler" : "other_host",
+      expectedUser: url.username === "postgres.hmluapddxfnimuqqmtpr",
+      expectedPort: url.port === "6543"
+    });
     pool = new Pool({
       connectionString: url.toString(),
       ssl: { rejectUnauthorized: true, ca: SUPABASE_CA },

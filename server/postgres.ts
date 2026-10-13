@@ -4,15 +4,31 @@ import { SUPABASE_CA } from './supabase-ca';
 // This module is server-only. DATABASE_URL must never use a VITE_ prefix.
 let pool: Pool | undefined;
 
+export function connectionURL(input: string): URL {
+  const url = new URL(input.trim());
+  // Vercel needs the shared IPv4 pooler rather than this project's IPv6 direct endpoint.
+  if (url.hostname === 'db.hmluapddxfnimuqqmtpr.supabase.co') {
+    url.hostname = 'aws-0-ap-northeast-1.pooler.supabase.com';
+    url.port = '6543';
+    url.username = 'postgres.hmluapddxfnimuqqmtpr';
+  }
+  for (const key of ['sslmode', 'sslcert', 'sslkey', 'sslrootcert']) url.searchParams.delete(key);
+  return url;
+}
+
 export function getPool(): Pool {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
     throw new Error('DATABASE_URL is required for persistent Sub-Track storage');
   }
   if (!pool) {
-    const url = new URL(connectionString);
-    // URI SSL flags must not override certificate verification.
-    for (const key of ['sslmode', 'sslcert', 'sslkey', 'sslrootcert']) url.searchParams.delete(key);
+    const url = connectionURL(connectionString);
+    // Safe diagnostics: never print the URI, password, username, or arbitrary hostname.
+    console.info('Database connection target', {
+      target: url.hostname === 'aws-0-ap-northeast-1.pooler.supabase.com' ? 'configured_supabase_pooler' : 'other_host',
+      expectedUser: url.username === 'postgres.hmluapddxfnimuqqmtpr',
+      expectedPort: url.port === '6543',
+    });
     pool = new Pool({
       connectionString: url.toString(),
       ssl: { rejectUnauthorized: true, ca: SUPABASE_CA },

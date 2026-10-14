@@ -15,7 +15,7 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
   subscriptions,
   onImport,
 }) => {
-  const [activeTab, setActiveTab] = useState<'export' | 'import'>('export');
+  const [activeTab, setActiveTab] = useState<'export' | 'json' | 'csv'>('export');
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [parsedItems, setParsedItems] = useState<Partial<Subscription>[]>([]);
@@ -75,7 +75,7 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
     document.body.removeChild(link);
   };
 
-  // Handle CSV file upload
+  // Handle an uploaded JSON or CSV file.
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setImportError(null);
     const file = e.target.files?.[0];
@@ -100,8 +100,6 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
         const items: Partial<Subscription>[] = [];
         // Skip header
         for (let i = 1; i < lines.length; i++) {
-          // Simple CSV row parser handling quotes
-          const match = lines[i].match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g);
           const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
           
           if (cols.length >= 3 && cols[0]) {
@@ -127,10 +125,30 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
 
         setParsedItems(items);
       } catch (err: any) {
-        setImportError(err.message || 'Failed to parse CSV file');
+        setParsedItems([]);
+        setImportError(err.message || 'Could not read the import file');
       }
     };
+    reader.onerror = () => setImportError('Could not read the selected file.');
     reader.readAsText(file);
+  };
+
+  const handlePastedJSON = (text: string) => {
+    if (!text.trim()) {
+      setParsedItems([]);
+      setImportError(null);
+      return;
+    }
+    try {
+      const json = JSON.parse(text);
+      const items = Array.isArray(json) ? json : json.subscriptions;
+      if (!Array.isArray(items) || !items.length) throw new Error('JSON must contain a nonempty subscription array.');
+      setParsedItems(items);
+      setImportError(null);
+    } catch (err: any) {
+      setParsedItems([]);
+      setImportError(err.message || 'Invalid JSON');
+    }
   };
 
   const executeImport = async () => {
@@ -165,26 +183,36 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
         </div>
 
         {/* Tab switch */}
-        <div className="flex border-b border-slate-100 dark:border-slate-800 px-6 pt-2">
+        <div className="flex border-b border-slate-100 dark:border-slate-800 px-4 pt-2">
           <button
             onClick={() => setActiveTab('export')}
-            className={`px-4 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer ${
               activeTab === 'export'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            Export Data
+            Export
           </button>
           <button
-            onClick={() => setActiveTab('import')}
-            className={`px-4 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer ${
-              activeTab === 'import'
+            onClick={() => { setActiveTab('json'); setParsedItems([]); setImportError(null); }}
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer ${
+              activeTab === 'json'
                 ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            Import CSV / JSON
+            Import JSON
+          </button>
+          <button
+            onClick={() => { setActiveTab('csv'); setParsedItems([]); setImportError(null); }}
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer ${
+              activeTab === 'csv'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            Import CSV
           </button>
         </div>
 
@@ -222,16 +250,16 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Upload a CSV or JSON file containing your subscriptions.
+                  {activeTab === 'json' ? 'Upload your subscription JSON file, including payment history and renewal settings.' : 'Upload a CSV file containing your subscriptions.'}
                 </p>
-                <button
+                {activeTab === 'csv' && <button
                   type="button"
                   onClick={handleDownloadTemplate}
                   className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 font-medium cursor-pointer"
                 >
                   <Download size={12} />
                   <span>Sample Template</span>
-                </button>
+                </button>}
               </div>
 
               {importError && (
@@ -240,29 +268,47 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
                 </div>
               )}
 
-              {/* Upload Dropzone */}
-              <div
+              <button
+                type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-indigo-500 dark:hover:border-indigo-500 rounded-2xl p-6 text-center cursor-pointer bg-slate-50/50 dark:bg-slate-800/30 transition-all"
+                className="w-full border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-indigo-500 dark:hover:border-indigo-500 rounded-2xl p-6 text-center cursor-pointer bg-slate-50/50 dark:bg-slate-800/30 transition-all"
               >
                 <Upload size={28} className="mx-auto text-indigo-500 mb-2" />
                 <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                  {parsedItems.length > 0 ? `${parsedItems.length} rows ready to import` : 'Click to select CSV or JSON file'}
+                  {activeTab === 'json' ? 'Choose JSON file' : 'Choose CSV file'}
                 </p>
                 <p className="text-[11px] text-slate-400 mt-1">
-                  Supports CSV (.csv) and complete backups (.json)
+                  {activeTab === 'json' ? 'Select subtrack-verified-import.json from your Downloads' : 'Select a .csv file from your device'}
                 </p>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".csv,.json"
-                  onChange={handleFileChange}
-                  className="hidden"
+              </button>
+              <input
+                key={activeTab}
+                ref={fileInputRef}
+                type="file"
+                accept={activeTab === 'json' ? '.json,application/json,text/plain' : '.csv,text/csv'}
+                onChange={handleFileChange}
+                className="hidden"
+              />
+
+              {activeTab === 'json' && <details className="text-xs text-slate-500 dark:text-slate-400">
+                <summary className="cursor-pointer text-indigo-600 dark:text-indigo-400">Or paste JSON if your phone hides the file</summary>
+                <textarea
+                  aria-label="Paste JSON subscriptions"
+                  onChange={(event) => handlePastedJSON(event.target.value)}
+                  placeholder="Paste the contents of your JSON import file here"
+                  className="mt-2 w-full h-28 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 text-slate-900 dark:text-white"
                 />
-              </div>
+              </details>}
 
               {parsedItems.length > 0 && (
-                <div className="pt-2 flex items-center justify-end gap-3">
+                <div className="pt-2 space-y-3">
+                  <div className="text-xs text-slate-600 dark:text-slate-300">
+                    <p className="font-semibold">{parsedItems.length} subscriptions ready:</p>
+                    <ul className="mt-1 space-y-1 max-h-24 overflow-y-auto">
+                      {parsedItems.map((item, index) => <li key={`${item.name}-${index}`}>{item.name} · {item.status} · {item.currency || 'USD'} {item.price}</li>)}
+                    </ul>
+                  </div>
+                  <div className="flex items-center justify-end gap-3">
                   <button
                     type="button"
                     onClick={() => setParsedItems([])}
@@ -277,8 +323,9 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
                     className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm disabled:opacity-50 cursor-pointer"
                   >
                     <Check size={14} />
-                    <span>{importing ? 'Importing...' : `Import ${parsedItems.length} Items`}</span>
+                    <span>{importing ? 'Importing...' : `Import ${parsedItems.length} subscriptions`}</span>
                   </button>
+                  </div>
                 </div>
               )}
             </div>

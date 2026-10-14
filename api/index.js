@@ -21,7 +21,7 @@ function connectionURL(input) {
     url.port = "6543";
     url.username = "postgres.hmluapddxfnimuqqmtpr";
   }
-  for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) url.searchParams.delete(key);
+  for (const key2 of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) url.searchParams.delete(key2);
   return url;
 }
 function getPool() {
@@ -78,8 +78,8 @@ async function execute(sql, args) {
   const { text, values } = bindSQL(sql, args);
   const result = await (connection.getStore() ?? getPool()).query(text, values);
   for (const row of result.rows) {
-    for (const key of ["price", "amount", "count"]) {
-      if (row[key] != null) row[key] = Number(row[key]);
+    for (const key2 of ["price", "amount", "count"]) {
+      if (row[key2] != null) row[key2] = Number(row[key2]);
     }
   }
   return result;
@@ -110,14 +110,14 @@ async function initDatabase() {
 }
 async function seedSubscriptionsForUser(userId) {
   const today = /* @__PURE__ */ new Date();
-  const formatDate = (date) => date.toISOString().split("T")[0];
-  const addDays = (d, days) => {
-    const copy = new Date(d);
+  const formatDate = (date3) => date3.toISOString().split("T")[0];
+  const addDays = (d2, days) => {
+    const copy = new Date(d2);
     copy.setDate(copy.getDate() + days);
     return formatDate(copy);
   };
-  const subMonths = (d, months) => {
-    const copy = new Date(d);
+  const subMonths = (d2, months) => {
+    const copy = new Date(d2);
     copy.setMonth(copy.getMonth() - months);
     return formatDate(copy);
   };
@@ -594,10 +594,379 @@ router.put("/me", authMiddleware, async (req, res) => {
 });
 var auth_default = router;
 
-// server/routes/subscriptions.ts
+// server/routes/gmail.ts
 import { Router as Router2 } from "express";
+import crypto4 from "node:crypto";
+import { z as z3 } from "zod";
+
+// server/subscription-import.ts
+import crypto2 from "node:crypto";
 import { z as z2 } from "zod";
-import crypto2 from "crypto";
+var date = z2.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((v) => !Number.isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v, "Invalid date");
+var ImportSchema = z2.object({
+  name: z2.string().trim().min(1).max(200),
+  category: z2.string().default("Other"),
+  price: z2.coerce.number().finite().nonnegative(),
+  currency: z2.enum(["USD", "KHR", "EUR", "GBP", "AUD", "CAD", "JPY", "THB", "VND", "SGD", "CNY", "INR"]).default("USD"),
+  billing_cycle: z2.enum(["weekly", "monthly", "quarterly", "semi_annual", "yearly", "lifetime"]),
+  start_date: date,
+  next_billing_date: date,
+  status: z2.enum(["active", "paused", "cancelled", "trial"]).default("active"),
+  payment_method: z2.string().default("other"),
+  notes: z2.string().max(4e3).default(""),
+  website: z2.string().default(""),
+  logo: z2.string().default(""),
+  color: z2.string().default("#4F46E5"),
+  reminder_days: z2.coerce.number().int().min(0).max(90).default(3),
+  auto_renew: z2.union([z2.boolean(), z2.literal(0), z2.literal(1)]).default(false),
+  cancellation_url: z2.string().default(""),
+  source_id: z2.string().max(200).optional(),
+  initial_payment: z2.object({ amount: z2.number().finite().nonnegative(), date, status: z2.enum(["paid", "failed"]).default("paid") }).optional()
+});
+async function importSubscription(userId, input) {
+  const s = ImportSchema.parse(input);
+  const id = s.source_id ? "sub-mail-" + crypto2.createHash("sha256").update(userId + "\0" + s.source_id).digest("hex") : "sub-" + crypto2.randomUUID();
+  if (await db.prepare("SELECT id FROM public.subtrack_subscriptions WHERE id=? AND user_id=?").get(id, userId)) return { id, added: false };
+  const added = await db.prepare(`INSERT INTO public.subtrack_subscriptions
+    (id,user_id,name,category,price,currency,billing_cycle,payment_method,start_date,next_billing_date,status,notes,website,logo,color,reminder_days,auto_renew,cancellation_url)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING`).run(id, userId, s.name, s.category, s.price, s.currency, s.billing_cycle, s.payment_method, s.start_date, s.next_billing_date, s.status, s.notes, s.website, s.logo, s.color, s.reminder_days, Number(Boolean(s.auto_renew)), s.cancellation_url);
+  if (added.changes && s.initial_payment) await db.prepare(`INSERT INTO public.subtrack_payment_history
+    (id,user_id,subscription_id,amount,currency,billing_date,payment_method,status) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`).run(s.source_id?.startsWith("gmail:") ? "gmail-" + crypto2.createHash("sha256").update(userId + s.source_id.slice(6)).digest("hex") : "hist-" + id, userId, id, s.initial_payment.amount, s.currency, s.initial_payment.date, s.payment_method, s.initial_payment.status);
+  return { id, added: added.changes > 0 };
+}
+
+// server/gmail/service.ts
+import crypto3 from "node:crypto";
+
+// server/gmail/schema.ts
+var gmailSchema = `-- Additive, server-only Gmail integration. Does not alter any Pinly tables.
+CREATE TABLE IF NOT EXISTS public.subtrack_gmail_connections (
+ user_id text PRIMARY KEY REFERENCES public.subtrack_users(id) ON DELETE CASCADE,
+ email text NOT NULL, refresh_cipher text NOT NULL, auto_sync boolean NOT NULL DEFAULT true,
+ scan_page text, scan_from timestamptz, scan_started timestamptz,
+ last_sync timestamptz, sync_until timestamptz, last_error text,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.subtrack_gmail_states (
+ hash text PRIMARY KEY, user_id text NOT NULL REFERENCES public.subtrack_users(id) ON DELETE CASCADE,
+ nonce_hash text NOT NULL, verifier_cipher text NOT NULL, expires_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS public.subtrack_gmail_events (
+ user_id text NOT NULL REFERENCES public.subtrack_users(id) ON DELETE CASCADE,
+ message_id text NOT NULL, evidence text NOT NULL, source_url text NOT NULL,
+ email_date timestamptz NOT NULL, state text NOT NULL DEFAULT 'pending',
+ created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(user_id,message_id)
+);
+ALTER TABLE public.subtrack_gmail_connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subtrack_gmail_states ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subtrack_gmail_events ENABLE ROW LEVEL SECURITY;
+CREATE TABLE IF NOT EXISTS public.subtrack_gmail_senders (
+ user_id text NOT NULL REFERENCES public.subtrack_users(id) ON DELETE CASCADE,
+ sender_key text NOT NULL, name text NOT NULL, PRIMARY KEY(user_id,sender_key)
+);
+ALTER TABLE public.subtrack_gmail_senders ENABLE ROW LEVEL SECURITY;
+`;
+
+// server/gmail/parser.ts
+import { createHash } from "node:crypto";
+function messageText(payload) {
+  function parts(p, type) {
+    return (p.mimeType === type && p.body?.data ? [Buffer.from(p.body.data, "base64url").toString("utf8")] : []).concat(...(p.parts || []).map((x) => parts(x, type)));
+  }
+  let text = parts(payload, "text/plain").join(" ");
+  if (!text) text = parts(payload, "text/html").join(" ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&nbsp;|&#160;/gi, " ").replace(/&amp;/gi, "&");
+  return text.replace(/\s+/g, " ").slice(0, 1e5);
+}
+var month = "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)";
+var d = month + "\\s+\\d{1,2}(?:,?\\s+20\\d{2})?";
+function date2(value, year) {
+  const v = /* @__PURE__ */ new Date(value + (/20\d{2}/.test(value) ? "" : ", " + year) + " UTC");
+  return Number.isNaN(v.valueOf()) ? void 0 : v.toISOString().slice(0, 10);
+}
+function parseEvidence(headers, text) {
+  const from = headers.from || "", subject = headers.subject || "";
+  const auth = headers["authentication-results"] || "";
+  const sender = from.match(/(?:<|\b)([A-Z0-9._%+-]+@[A-Z0-9.-]+)/i)?.[1]?.toLowerCase() || "";
+  const domain = sender.split("@")[1] || "";
+  const verified = auth.includes("mx.google.com;") && /\bdkim=pass\b/.test(auth) && /\bdmarc=pass\b/.test(auth);
+  const known = [["ElevenLabs Starter", "elevenlabs.io"], ["Meshy Pro", "meshy.ai"], ["Claude Pro", "anthropic.com"], ["ChatGPT Plus", "openai.com"], ["Telegram Premium", "apple.com"], ["Railway Pro", "railway.app"]];
+  let entry = known.find(([, v]) => domain === v || domain.endsWith("." + v));
+  if (domain === "stripe.com") {
+    if (/receipt from Eleven Labs Inc\./i.test(subject + " " + text)) entry = ["ElevenLabs Starter", "stripe.com"];
+    if (/receipt from Meshy/i.test(subject + " " + text)) entry = ["Meshy Pro", "stripe.com"];
+  }
+  if (/one.time|prepaid|extra usage|credit purchase|reset key/i.test(subject + " " + text)) return null;
+  if (!/(receipt|invoice|subscri|renew|payment|paused|cancel)/i.test(subject)) return null;
+  if (/(save \d|offer|discount|deal|newsletter)/i.test(subject) && !/receipt|invoice/i.test(subject)) return null;
+  let name = entry?.[0] || "Unrecognized service";
+  if (domain === "apple.com" && !/Telegram Premium/i.test(text)) name = "Apple subscription \u2014 review service";
+  const trusted = Boolean(entry) && verified;
+  const identity = { sender_key: createHash("sha256").update(sender).digest("hex"), requires_approval: domain === "stripe.com" };
+  if (name === "Claude Pro" && /access.*(?:has been|is) paused/i.test(subject + " " + text)) return { ...identity, name, kind: "paused", status: "paused", summary: "Paid access paused; verify outstanding invoice.", trusted };
+  if (name === "ChatGPT Plus" && /will not renew|won.t renew/i.test(text)) {
+    const end = text.match(new RegExp("(?:current (?:billing )?period|access|end)[\\s\\S]{0,100}?(" + d + ")", "i"));
+    return { ...identity, name, kind: "cancelled", status: "cancelled", next_billing_date: end ? date2(end[1]) : void 0, summary: "Nonrenewing; access may continue until the stated period end.", trusted };
+  }
+  if (/unsuccessful|declined|failed|past.due/i.test(subject)) return { ...identity, name, kind: "review", summary: "Payment failed; no payment recorded. Check access and retry status.", trusted };
+  if (/receipt/i.test(subject) && ["ElevenLabs Starter", "Meshy Pro"].includes(name)) {
+    const period = text.match(new RegExp("(" + d + ")\\s*[\u2013\u2014-]\\s*(" + d + ")", "i"));
+    const year = period?.[2].match(/20\d{2}/)?.[0] || period?.[1].match(/20\d{2}/)?.[0];
+    const start = period ? date2(period[1], year) : void 0, end = period ? date2(period[2], year) : void 0;
+    const paid = text.match(new RegExp("Paid\\s+(" + d + ")", "i"));
+    const paidDate = paid ? date2(paid[1], year) : void 0;
+    const amount = text.match(/(?:amount paid|paid)\s*\$([\d,]+\.\d{2})/i)?.[1];
+    const plan = name === "Meshy Pro" ? "Pro" : "Starter";
+    const regular = text.match(new RegExp("\\b" + plan + "\\b[^$]{0,100}?\\$([\\d,]+\\.\\d{2})", "i"))?.[1];
+    if (start && end && amount && regular && paidDate && end > start) return { ...identity, name, kind: "receipt", payment_date: paidDate, price: Number(regular.replace(/,/g, "")), amount: Number(amount.replace(/,/g, "")), start_date: start, next_billing_date: end, billing_cycle: "monthly", status: "active", summary: "Receipt parsed; billing-period end used as expected next billing date.", trusted };
+  }
+  return { ...identity, name, kind: "review", summary: "Billing email found. Verify service, recurring price, dates and current status before importing.", trusted };
+}
+
+// server/gmail/service.ts
+function configured() {
+  return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.APP_URL);
+}
+function appURL() {
+  const url = new URL(process.env.APP_URL);
+  if (url.protocol !== "https:" && url.hostname !== "localhost") throw new Error("APP_URL must use HTTPS");
+  return url.origin;
+}
+var hash = (s) => crypto3.createHash("sha256").update(s).digest("hex");
+var key = crypto3.scryptSync(JWT_SECRET, "subtrack:gmail:tokens:v1", 32);
+function encrypt(s) {
+  const iv = crypto3.randomBytes(12), c = crypto3.createCipheriv("aes-256-gcm", key, iv);
+  const data = Buffer.concat([c.update(s, "utf8"), c.final()]);
+  return Buffer.concat([iv, c.getAuthTag(), data]).toString("base64url");
+}
+function decrypt(s) {
+  const raw = Buffer.from(s, "base64url"), c = crypto3.createDecipheriv("aes-256-gcm", key, raw.subarray(0, 12));
+  c.setAuthTag(raw.subarray(12, 28));
+  return Buffer.concat([c.update(raw.subarray(28)), c.final()]).toString("utf8");
+}
+var ready;
+function ensureSchema() {
+  if (!ready) ready = (async () => {
+    await db.transaction(async () => {
+      for (const sql of gmailSchema.split(";").filter((x) => x.trim())) await db.prepare(sql).run();
+    })();
+  })().catch((e) => {
+    ready = void 0;
+    throw e;
+  });
+  return ready;
+}
+async function googleJSON(url, options) {
+  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(15e3) });
+  const value = await response.json();
+  if (!response.ok) {
+    const e = new Error(response.status === 400 || response.status === 401 ? "Reconnect Gmail to restore access." : "Gmail request failed; try again later.");
+    e.status = 502;
+    throw e;
+  }
+  return value;
+}
+async function tokens(params) {
+  return googleJSON("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ ...params, client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET }) });
+}
+async function gmail(path, access) {
+  return googleJSON("https://gmail.googleapis.com/gmail/v1/users/me/" + path, { headers: { Authorization: "Bearer " + access } });
+}
+async function applyEvidence(userId, messageId, e) {
+  const subscriptions = await db.prepare("SELECT * FROM public.subtrack_subscriptions WHERE user_id = ? AND name = ?").all(userId, e.name);
+  if (subscriptions.length !== 1 || !e.trusted) return false;
+  if (e.requires_approval && !await db.prepare("SELECT name FROM public.subtrack_gmail_senders WHERE user_id=? AND sender_key=? AND name=?").get(userId, e.sender_key, e.name)) return false;
+  const s = subscriptions[0];
+  if (e.kind === "receipt" && e.price !== void 0 && e.amount !== void 0 && e.start_date && e.payment_date && e.next_billing_date && e.billing_cycle === s.billing_cycle && e.next_billing_date >= s.next_billing_date && s.status === "active" && s.currency === "USD") {
+    await db.prepare(`UPDATE public.subtrack_subscriptions SET price=?,next_billing_date=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`).run(e.price, e.next_billing_date, s.id, userId);
+    await db.prepare(`INSERT INTO public.subtrack_payment_history (id,user_id,subscription_id,amount,currency,billing_date,payment_method,status) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`).run("gmail-" + hash(userId + messageId), userId, s.id, e.amount, "USD", e.payment_date, s.payment_method, "paid");
+    return true;
+  }
+  if (e.kind === "paused") {
+    await db.prepare("UPDATE public.subtrack_subscriptions SET status='paused',updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(s.id, userId);
+    return true;
+  }
+  return false;
+}
+async function syncUser(userId) {
+  await ensureSchema();
+  const now = /* @__PURE__ */ new Date();
+  const deadline = Date.now() + 18e4;
+  const conn = await db.prepare(`UPDATE public.subtrack_gmail_connections SET sync_until=? WHERE user_id=? AND (sync_until IS NULL OR sync_until < ?) RETURNING *`).get(new Date(now.valueOf() + 3e5).toISOString(), userId, now.toISOString());
+  if (!conn) return { busy: true, found: 0, applied: 0 };
+  let found = 0, applied = 0;
+  try {
+    const access = (await tokens({ grant_type: "refresh_token", refresh_token: decrypt(conn.refresh_cipher) })).access_token;
+    const from = conn.scan_from ? new Date(conn.scan_from) : conn.last_sync ? new Date(new Date(conn.last_sync).valueOf() - 3 * 864e5) : new Date(now.valueOf() - 100 * 864e5);
+    const query = "after:" + Math.floor(from.valueOf() / 1e3) + " -in:trash -in:spam (subject:receipt OR subject:invoice OR subject:subscription OR subject:renewal OR subject:cancel OR subject:payment OR subject:paused)";
+    let page = conn.scan_page || "";
+    let pages = 0;
+    let incomplete = false;
+    const scanStarted = conn.scan_started || now.toISOString();
+    do {
+      const list = await gmail("messages?" + new URLSearchParams({ q: query, maxResults: "50", ...page ? { pageToken: page } : {} }), access);
+      const currentPage = page;
+      for (const m of list.messages || []) {
+        if (Date.now() > deadline) {
+          incomplete = true;
+          break;
+        }
+        if (await db.prepare("SELECT state FROM public.subtrack_gmail_events WHERE user_id=? AND message_id=?").get(userId, m.id)) continue;
+        const msg = await gmail("messages/" + encodeURIComponent(m.id) + "?format=full", access);
+        const headers = {};
+        for (const h of msg.payload?.headers || []) if (headers[h.name.toLowerCase()] === void 0) headers[h.name.toLowerCase()] = h.value;
+        const evidence = parseEvidence(headers, messageText(msg.payload));
+        const emailDate = new Date(Number(msg.internalDate)).toISOString();
+        await db.transaction(async () => {
+          const claimed = await db.prepare("INSERT INTO public.subtrack_gmail_events (user_id,message_id,evidence,source_url,email_date,state) VALUES (?,?,?,?,?,?) ON CONFLICT(user_id,message_id) DO NOTHING").run(userId, m.id, JSON.stringify(evidence || {}), "https://mail.google.com/mail/u/0/#all/" + m.id, emailDate, evidence ? "pending" : "ignored");
+          if (!claimed.changes || !evidence) return;
+          found++;
+          if (conn.auto_sync && conn.last_sync && new Date(emailDate) > new Date(conn.last_sync) && await applyEvidence(userId, m.id, evidence)) {
+            await db.prepare("UPDATE public.subtrack_gmail_events SET state='applied' WHERE user_id=? AND message_id=?").run(userId, m.id);
+            applied++;
+          }
+        })();
+      }
+      page = incomplete ? currentPage : list.nextPageToken || "";
+      pages++;
+      if (incomplete) break;
+    } while (page && pages < 4);
+    if (page || incomplete) await db.prepare("UPDATE public.subtrack_gmail_connections SET scan_page=?,scan_from=?,scan_started=?,last_error='More billing emails remain. Run Scan again to continue.' WHERE user_id=?").run(page, from.toISOString(), scanStarted, userId);
+    else await db.prepare("UPDATE public.subtrack_gmail_connections SET last_sync=?,scan_page=NULL,scan_from=NULL,scan_started=NULL,last_error=NULL WHERE user_id=?").run(scanStarted, userId);
+    return { found, applied, more: Boolean(page) || incomplete };
+  } catch (e) {
+    await db.prepare("UPDATE public.subtrack_gmail_connections SET last_error='Sync failed. Reconnect Gmail if it continues.' WHERE user_id=?").run(userId);
+    throw e;
+  } finally {
+    await db.prepare("UPDATE public.subtrack_gmail_connections SET sync_until=NULL WHERE user_id=?").run(userId);
+  }
+}
+
+// server/routes/gmail.ts
+var router2 = Router2();
+var scope = "https://www.googleapis.com/auth/gmail.readonly";
+var callback = () => appURL() + "/api/gmail/callback";
+function cookie(req, name) {
+  return (req.headers.cookie || "").split(";").map((s) => s.trim()).find((s) => s.startsWith(name + "="))?.slice(name.length + 1) || "";
+}
+router2.get("/callback", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  if (!configured()) return res.status(503).send("Gmail connection is not configured.");
+  await ensureSchema();
+  const state = typeof req.query.state === "string" ? req.query.state : "";
+  const nonce = cookie(req, "subtrack_gmail_nonce");
+  if (!state || !nonce) return res.status(400).send("Connection expired. Start again from Settings.");
+  const pending = await db.prepare("DELETE FROM public.subtrack_gmail_states WHERE hash=? AND nonce_hash=? AND expires_at>? RETURNING *").get(hash(state), hash(nonce), (/* @__PURE__ */ new Date()).toISOString());
+  res.clearCookie("subtrack_gmail_nonce", { path: "/api/gmail/callback", secure: appURL().startsWith("https:"), sameSite: "lax" });
+  if (!pending) return res.status(400).send("Connection expired. Start again from Settings.");
+  if (req.query.error || typeof req.query.code !== "string") return res.redirect(appURL() + "/?gmail=declined");
+  try {
+    const token = await tokens({ grant_type: "authorization_code", code: req.query.code, redirect_uri: callback(), code_verifier: decrypt(pending.verifier_cipher) });
+    if (!String(token.scope || "").split(" ").includes(scope) || !token.refresh_token) throw new Error("Missing Gmail permission.");
+    const profile = await gmail("profile", token.access_token);
+    const user = await db.prepare("SELECT email FROM public.subtrack_users WHERE id=?").get(pending.user_id);
+    if (profile.emailAddress.toLowerCase() !== user.email.toLowerCase()) return res.redirect(appURL() + "/?gmail=account-mismatch");
+    await db.prepare(`INSERT INTO public.subtrack_gmail_connections (user_id,email,refresh_cipher) VALUES (?,?,?)
+      ON CONFLICT(user_id) DO UPDATE SET email=EXCLUDED.email,refresh_cipher=EXCLUDED.refresh_cipher,last_error=NULL`).run(pending.user_id, profile.emailAddress, encrypt(token.refresh_token));
+    return res.redirect(appURL() + "/?gmail=connected");
+  } catch {
+    return res.redirect(appURL() + "/?gmail=failed");
+  }
+});
+router2.get("/cron", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const supplied = req.headers.authorization || "";
+  const expected = "Bearer " + secret;
+  if (!secret || secret.length < 32 || supplied.length !== expected.length || !crypto4.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return res.status(401).json({ error: "Unauthorized" });
+  if (!configured()) return res.json({ configured: false });
+  await ensureSchema();
+  const users = await db.prepare("SELECT user_id FROM public.subtrack_gmail_connections ORDER BY last_sync ASC NULLS FIRST LIMIT 10").all();
+  const deadline = Date.now() + 24e4;
+  let checked = 0, failed = 0;
+  for (const u of users) {
+    if (Date.now() > deadline - 18e4) break;
+    try {
+      await syncUser(u.user_id);
+      checked++;
+    } catch {
+      failed++;
+    }
+  }
+  return res.json({ checked, failed });
+});
+router2.use(authMiddleware);
+router2.get("/status", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!configured()) return res.json({ configured: false, connected: false, events: [] });
+  await ensureSchema();
+  const conn = await db.prepare("SELECT email,auto_sync,last_sync,last_error FROM public.subtrack_gmail_connections WHERE user_id=?").get(req.user.userId);
+  const events = await db.prepare("SELECT message_id,evidence,source_url,email_date,state FROM public.subtrack_gmail_events WHERE user_id=? AND state IN ('pending','applied') ORDER BY email_date DESC LIMIT 100").all(req.user.userId);
+  return res.json({ configured: true, connected: Boolean(conn), ...conn, events: events.map((e) => ({ ...e, evidence: JSON.parse(e.evidence) })) });
+});
+router2.use(async (_req, res, next) => {
+  if (!configured()) return res.status(503).json({ error: "Gmail setup is not finished yet." });
+  await ensureSchema();
+  next();
+});
+router2.post("/connect", async (req, res) => {
+  const state = crypto4.randomBytes(32).toString("base64url"), nonce = crypto4.randomBytes(32).toString("base64url"), verifier = crypto4.randomBytes(32).toString("base64url");
+  await db.prepare("DELETE FROM public.subtrack_gmail_states WHERE expires_at<?").run((/* @__PURE__ */ new Date()).toISOString());
+  await db.prepare("INSERT INTO public.subtrack_gmail_states(hash,user_id,nonce_hash,verifier_cipher,expires_at) VALUES(?,?,?,?,?)").run(hash(state), req.user.userId, hash(nonce), encrypt(verifier), new Date(Date.now() + 6e5).toISOString());
+  res.cookie("subtrack_gmail_nonce", nonce, { httpOnly: true, secure: appURL().startsWith("https:"), sameSite: "lax", path: "/api/gmail/callback", maxAge: 6e5 });
+  const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  url.search = new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID, redirect_uri: callback(), response_type: "code", scope, access_type: "offline", prompt: "consent", state, code_challenge: crypto4.createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", login_hint: req.user.email }).toString();
+  res.json({ url: url.toString() });
+});
+router2.post("/sync", async (req, res) => res.json(await syncUser(req.user.userId)));
+router2.put("/preferences", async (req, res) => {
+  const parsed = z3.object({ auto_sync: z3.boolean() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid preference" });
+  await db.prepare("UPDATE public.subtrack_gmail_connections SET auto_sync=? WHERE user_id=?").run(parsed.data.auto_sync, req.user.userId);
+  return res.json({ success: true });
+});
+router2.post("/disconnect", async (req, res) => {
+  const c = await db.prepare("SELECT refresh_cipher FROM public.subtrack_gmail_connections WHERE user_id=?").get(req.user.userId);
+  if (c) try {
+    await fetch("https://oauth2.googleapis.com/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: decrypt(c.refresh_cipher) }), signal: AbortSignal.timeout(1e4) });
+  } catch {
+  }
+  await db.transaction(async () => {
+    await db.prepare("DELETE FROM public.subtrack_gmail_connections WHERE user_id=?").run(req.user.userId);
+    await db.prepare("DELETE FROM public.subtrack_gmail_states WHERE user_id=?").run(req.user.userId);
+  })();
+  return res.json({ success: true });
+});
+router2.post("/events/:id/dismiss", async (req, res) => {
+  await db.prepare("UPDATE public.subtrack_gmail_events SET state='dismissed' WHERE user_id=? AND message_id=? AND state='pending'").run(req.user.userId, req.params.id);
+  return res.json({ success: true });
+});
+router2.post("/events/:id/approve", async (req, res) => {
+  const parsed = ImportSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
+  let done = false;
+  await db.transaction(async () => {
+    const e = await db.prepare("SELECT * FROM public.subtrack_gmail_events WHERE user_id=? AND message_id=? AND state='pending' FOR UPDATE").get(req.user.userId, req.params.id);
+    if (!e) return;
+    const s = parsed.data;
+    const evidence = JSON.parse(e.evidence);
+    if (evidence.trusted && evidence.sender_key) await db.prepare("INSERT INTO public.subtrack_gmail_senders(user_id,sender_key,name) VALUES(?,?,?) ON CONFLICT(user_id,sender_key) DO UPDATE SET name=EXCLUDED.name").run(req.user.userId, evidence.sender_key, s.name);
+    const matching = await db.prepare("SELECT id FROM public.subtrack_subscriptions WHERE user_id=? AND name=?").all(req.user.userId, s.name);
+    if (matching.length > 1) throw new Error("Resolve duplicate services before approving.");
+    if (matching.length === 1) {
+      await db.prepare("UPDATE public.subtrack_subscriptions SET price=?,billing_cycle=?,next_billing_date=?,status=?,auto_renew=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(s.price, s.billing_cycle, s.next_billing_date, s.status, Number(Boolean(s.auto_renew)), s.notes, matching[0].id, req.user.userId);
+      if (s.initial_payment) await db.prepare("INSERT INTO public.subtrack_payment_history(id,user_id,subscription_id,amount,currency,billing_date,payment_method,status) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING").run("gmail-" + hash(req.user.userId + req.params.id), req.user.userId, matching[0].id, s.initial_payment.amount, s.currency, s.initial_payment.date, s.payment_method, s.initial_payment.status);
+    } else await importSubscription(req.user.userId, { ...s, source_id: "gmail:" + req.params.id, notes: s.notes + "\nSource: " + e.source_url });
+    await db.prepare("UPDATE public.subtrack_gmail_events SET state='applied' WHERE user_id=? AND message_id=?").run(req.user.userId, req.params.id);
+    done = true;
+  })();
+  return res.status(done ? 200 : 404).json({ success: done });
+});
+var gmail_default = router2;
+
+// server/routes/subscriptions.ts
+import { Router as Router3 } from "express";
+import { z as z4 } from "zod";
+import crypto5 from "crypto";
 
 // server/currency.ts
 var EXCHANGE_RATES = {
@@ -643,34 +1012,34 @@ function calculateYearlyEquivalent(price, billingCycle, fromCurrency = "USD", to
 }
 
 // server/routes/subscriptions.ts
-var router2 = Router2();
-router2.use(authMiddleware);
-var SubscriptionSchema = z2.object({
-  name: z2.string().min(1, "Service name is required"),
-  category: z2.string().min(1, "Category is required"),
-  price: z2.preprocess(
+var router3 = Router3();
+router3.use(authMiddleware);
+var SubscriptionSchema = z4.object({
+  name: z4.string().min(1, "Service name is required"),
+  category: z4.string().min(1, "Category is required"),
+  price: z4.preprocess(
     (val) => typeof val === "string" ? parseFloat(val) : val,
-    z2.number().positive("Price must be greater than 0")
+    z4.number().positive("Price must be greater than 0")
   ),
-  currency: z2.string().default("USD"),
-  billing_cycle: z2.enum(["weekly", "monthly", "quarterly", "semi_annual", "yearly", "lifetime"]),
-  payment_method: z2.string().default("credit_card"),
-  start_date: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Start date must be YYYY-MM-DD"),
-  next_billing_date: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Next billing date must be YYYY-MM-DD"),
-  status: z2.enum(["active", "paused", "cancelled", "trial"]).default("active"),
-  notes: z2.string().optional().default(""),
-  website: z2.string().optional().default(""),
-  logo: z2.string().optional().default(""),
-  color: z2.string().optional().default("#4F46E5"),
-  reminder_days: z2.preprocess(
+  currency: z4.string().default("USD"),
+  billing_cycle: z4.enum(["weekly", "monthly", "quarterly", "semi_annual", "yearly", "lifetime"]),
+  payment_method: z4.string().default("credit_card"),
+  start_date: z4.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Start date must be YYYY-MM-DD"),
+  next_billing_date: z4.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Next billing date must be YYYY-MM-DD"),
+  status: z4.enum(["active", "paused", "cancelled", "trial"]).default("active"),
+  notes: z4.string().optional().default(""),
+  website: z4.string().optional().default(""),
+  logo: z4.string().optional().default(""),
+  color: z4.string().optional().default("#4F46E5"),
+  reminder_days: z4.preprocess(
     (val) => typeof val === "string" ? parseInt(val, 10) : val,
-    z2.number().int().min(0).max(90).default(3)
+    z4.number().int().min(0).max(90).default(3)
   ),
-  auto_renew: z2.preprocess(
+  auto_renew: z4.preprocess(
     (val) => typeof val === "boolean" ? val ? 1 : 0 : typeof val === "string" ? val === "true" || val === "1" ? 1 : 0 : typeof val === "number" ? val : 1,
-    z2.number().int().min(0).max(1).default(1)
+    z4.number().int().min(0).max(1).default(1)
   ),
-  cancellation_url: z2.string().optional().default("")
+  cancellation_url: z4.string().optional().default("")
 });
 function calculateDaysDifference(targetDateStr) {
   const target = /* @__PURE__ */ new Date(targetDateStr + "T00:00:00");
@@ -680,32 +1049,32 @@ function calculateDaysDifference(targetDateStr) {
   return Math.ceil(diffTime / (1e3 * 60 * 60 * 24));
 }
 function advanceBillingDate(currentDateStr, cycle) {
-  const date = /* @__PURE__ */ new Date(currentDateStr + "T00:00:00");
+  const date3 = /* @__PURE__ */ new Date(currentDateStr + "T00:00:00");
   switch (cycle.toLowerCase()) {
     case "weekly":
-      date.setDate(date.getDate() + 7);
+      date3.setDate(date3.getDate() + 7);
       break;
     case "monthly":
-      date.setMonth(date.getMonth() + 1);
+      date3.setMonth(date3.getMonth() + 1);
       break;
     case "quarterly":
-      date.setMonth(date.getMonth() + 3);
+      date3.setMonth(date3.getMonth() + 3);
       break;
     case "semi_annual":
-      date.setMonth(date.getMonth() + 6);
+      date3.setMonth(date3.getMonth() + 6);
       break;
     case "yearly":
-      date.setFullYear(date.getFullYear() + 1);
+      date3.setFullYear(date3.getFullYear() + 1);
       break;
     case "lifetime":
       break;
     default:
-      date.setMonth(date.getMonth() + 1);
+      date3.setMonth(date3.getMonth() + 1);
       break;
   }
-  return date.toISOString().split("T")[0];
+  return date3.toISOString().split("T")[0];
 }
-router2.get("/", async (req, res) => {
+router3.get("/", async (req, res) => {
   const userId = req.user.userId;
   const userCurrency = req.user.currency || "USD";
   const { search, category, status, billing_cycle, payment_method, sort_by = "next_billing_date", sort_order = "asc" } = req.query;
@@ -763,7 +1132,7 @@ router2.get("/", async (req, res) => {
     count: subscriptions.length
   });
 });
-router2.get("/:id", async (req, res) => {
+router3.get("/:id", async (req, res) => {
   const userId = req.user.userId;
   const sub = await db.prepare("SELECT * FROM public.subtrack_subscriptions WHERE id = ? AND user_id = ?").get(req.params.id, userId);
   if (!sub) {
@@ -779,7 +1148,7 @@ router2.get("/:id", async (req, res) => {
     }
   });
 });
-router2.post("/", async (req, res) => {
+router3.post("/", async (req, res) => {
   const userId = req.user.userId;
   const parseResult = SubscriptionSchema.safeParse(req.body);
   if (!parseResult.success) {
@@ -789,7 +1158,7 @@ router2.post("/", async (req, res) => {
     });
   }
   const data = parseResult.data;
-  const subId = `sub-${crypto2.randomUUID()}`;
+  const subId = `sub-${crypto5.randomUUID()}`;
   await db.transaction(async () => {
     await db.prepare(`
     INSERT INTO public.subtrack_subscriptions (
@@ -825,7 +1194,7 @@ router2.post("/", async (req, res) => {
     INSERT INTO public.subtrack_payment_history (id, user_id, subscription_id, amount, currency, billing_date, payment_method, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'paid')
   `).run(
-      `hist-${crypto2.randomUUID()}`,
+      `hist-${crypto5.randomUUID()}`,
       userId,
       subId,
       data.price,
@@ -841,7 +1210,7 @@ router2.post("/", async (req, res) => {
     message: "Subscription added successfully"
   });
 });
-router2.put("/:id", async (req, res) => {
+router3.put("/:id", async (req, res) => {
   const userId = req.user.userId;
   const subId = req.params.id;
   const existing = await db.prepare("SELECT * FROM public.subtrack_subscriptions WHERE id = ? AND user_id = ?").get(subId, userId);
@@ -903,7 +1272,7 @@ router2.put("/:id", async (req, res) => {
     message: "Subscription updated successfully"
   });
 });
-router2.delete("/:id", async (req, res) => {
+router3.delete("/:id", async (req, res) => {
   const userId = req.user.userId;
   const subId = req.params.id;
   const result = await db.prepare("DELETE FROM public.subtrack_subscriptions WHERE id = ? AND user_id = ?").run(subId, userId);
@@ -915,7 +1284,7 @@ router2.delete("/:id", async (req, res) => {
     message: "Subscription removed successfully"
   });
 });
-router2.post("/:id/renew", async (req, res) => {
+router3.post("/:id/renew", async (req, res) => {
   const userId = req.user.userId;
   const subId = req.params.id;
   const nextBilling = await db.transaction(async () => {
@@ -928,7 +1297,7 @@ router2.post("/:id/renew", async (req, res) => {
     INSERT INTO public.subtrack_payment_history (id, user_id, subscription_id, amount, currency, billing_date, payment_method, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'paid')
   `).run(
-      `hist-${crypto2.randomUUID()}`,
+      `hist-${crypto5.randomUUID()}`,
       userId,
       subId,
       sub.price,
@@ -953,7 +1322,7 @@ router2.post("/:id/renew", async (req, res) => {
     message: `Renewed successfully! Next billing scheduled for ${nextBilling}`
   });
 });
-router2.post("/:id/toggle-status", async (req, res) => {
+router3.post("/:id/toggle-status", async (req, res) => {
   const userId = req.user.userId;
   const subId = req.params.id;
   const { status } = req.body;
@@ -977,7 +1346,7 @@ router2.post("/:id/toggle-status", async (req, res) => {
     message: `Subscription status set to ${status}`
   });
 });
-router2.post("/reset-seed", async (req, res) => {
+router3.post("/reset-seed", async (req, res) => {
   const userId = req.user.userId;
   await db.transaction(async () => {
     await db.prepare("DELETE FROM public.subtrack_subscriptions WHERE user_id = ?").run(userId);
@@ -988,64 +1357,30 @@ router2.post("/reset-seed", async (req, res) => {
     message: "Sample subscriptions re-seeded successfully"
   });
 });
-router2.post("/import", async (req, res) => {
+router3.post("/import", async (req, res) => {
   const userId = req.user.userId;
   const { subscriptions: items } = req.body;
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ success: false, error: "No subscriptions provided for import" });
   }
+  const parsed = z4.array(ImportSchema).max(500).safeParse(items);
+  if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues[0].message });
   let importedCount = 0;
-  const insertStmt = db.prepare(`
-    INSERT INTO public.subtrack_subscriptions (
-      id, user_id, name, category, price, currency, billing_cycle,
-      payment_method, start_date, next_billing_date, status, notes,
-      website, logo, color, reminder_days, auto_renew, cancellation_url
-    ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?
-    )
-  `);
-  const tx = db.transaction(async (subs) => {
-    for (const item of subs) {
-      if (!item.name || !item.price) continue;
-      const subId = `sub-${crypto2.randomUUID()}`;
-      await insertStmt.run(
-        subId,
-        userId,
-        String(item.name).trim(),
-        item.category || "Other",
-        Number(item.price) || 0,
-        (item.currency || "USD").toUpperCase(),
-        item.billing_cycle || "monthly",
-        item.payment_method || "credit_card",
-        item.start_date || (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
-        item.next_billing_date || (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
-        item.status || "active",
-        item.notes || "",
-        item.website || "",
-        item.logo || "",
-        item.color || "#4F46E5",
-        Number(item.reminder_days) || 3,
-        item.auto_renew !== void 0 ? Number(Boolean(item.auto_renew)) : 1,
-        item.cancellation_url || ""
-      );
-      importedCount++;
-    }
-  });
-  await tx(items);
+  await db.transaction(async () => {
+    for (const item of parsed.data) if ((await importSubscription(userId, item)).added) importedCount++;
+  })();
   return res.json({
     success: true,
     importedCount,
     message: `Successfully imported ${importedCount} subscription(s)`
   });
 });
-var subscriptions_default = router2;
+var subscriptions_default = router3;
 
 // server/routes/analytics.ts
-import { Router as Router3 } from "express";
-var router3 = Router3();
-router3.use(authMiddleware);
+import { Router as Router4 } from "express";
+var router4 = Router4();
+router4.use(authMiddleware);
 function calculateDaysDifference2(targetDateStr) {
   const target = /* @__PURE__ */ new Date(targetDateStr + "T00:00:00");
   const today = /* @__PURE__ */ new Date();
@@ -1053,7 +1388,7 @@ function calculateDaysDifference2(targetDateStr) {
   const diffTime = target.getTime() - today.getTime();
   return Math.ceil(diffTime / (1e3 * 60 * 60 * 24));
 }
-router3.get("/summary", async (req, res) => {
+router4.get("/summary", async (req, res) => {
   const userId = req.user.userId;
   const targetCurrency = req.user.currency || "USD";
   const subscriptions = await db.prepare("SELECT * FROM public.subtrack_subscriptions WHERE user_id = ?").all(userId);
@@ -1299,10 +1634,10 @@ router3.get("/summary", async (req, res) => {
     }
   });
 });
-var analytics_default = router3;
+var analytics_default = router4;
 
 // server/routes/categories.ts
-import { Router as Router4 } from "express";
+import { Router as Router5 } from "express";
 
 // src/lib/categories.ts
 var DEFAULT_CATEGORIES = [
@@ -1319,10 +1654,10 @@ var DEFAULT_CATEGORIES = [
 ];
 
 // server/routes/categories.ts
-import crypto3 from "crypto";
-var router4 = Router4();
-router4.use(authMiddleware);
-router4.get("/", async (req, res) => {
+import crypto6 from "crypto";
+var router5 = Router5();
+router5.use(authMiddleware);
+router5.get("/", async (req, res) => {
   const userId = req.user.userId;
   const userCategories = await db.prepare("SELECT * FROM public.subtrack_categories WHERE user_id = ?").all(userId);
   const allCategories = [
@@ -1334,13 +1669,13 @@ router4.get("/", async (req, res) => {
     data: allCategories
   });
 });
-router4.post("/", async (req, res) => {
+router5.post("/", async (req, res) => {
   const userId = req.user.userId;
   const { name, icon = "Tag", color = "#6366F1" } = req.body;
   if (!name || typeof name !== "string" || name.trim().length === 0) {
     return res.status(400).json({ success: false, error: "Category name is required" });
   }
-  const catId = `cat-${crypto3.randomUUID()}`;
+  const catId = `cat-${crypto6.randomUUID()}`;
   await db.prepare(`
     INSERT INTO public.subtrack_categories (id, user_id, name, icon, color)
     VALUES (?, ?, ?, ?, ?)
@@ -1351,7 +1686,7 @@ router4.post("/", async (req, res) => {
     data: created
   });
 });
-var categories_default = router4;
+var categories_default = router5;
 
 // server/index.ts
 dotenv.config();
@@ -1402,6 +1737,8 @@ app.use("/api/analytics", analytics_default);
 app.use("/analytics", analytics_default);
 app.use("/api/categories", categories_default);
 app.use("/categories", categories_default);
+app.use("/api/gmail", gmail_default);
+app.use("/gmail", gmail_default);
 app.use((req, res) => {
   res.status(404).json({ success: false, error: `Endpoint ${req.path} not found` });
 });

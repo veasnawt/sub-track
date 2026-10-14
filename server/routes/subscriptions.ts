@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { ImportSchema, importSubscription } from '../subscription-import';
 import { z } from 'zod';
 import crypto from 'crypto';
 import { db, seedSubscriptionsForUser } from '../db';
@@ -426,48 +427,12 @@ router.post('/import', async (req: AuthenticatedRequest, res) => {
     return res.status(400).json({ success: false, error: 'No subscriptions provided for import' });
   }
 
+  const parsed = z.array(ImportSchema).max(500).safeParse(items);
+  if (!parsed.success) return res.status(400).json({success:false,error:parsed.error.issues[0].message});
   let importedCount = 0;
-  const insertStmt = db.prepare(`
-    INSERT INTO public.subtrack_subscriptions (
-      id, user_id, name, category, price, currency, billing_cycle,
-      payment_method, start_date, next_billing_date, status, notes,
-      website, logo, color, reminder_days, auto_renew, cancellation_url
-    ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?
-    )
-  `);
-
-  const tx = db.transaction(async (subs: any[]) => {
-    for (const item of subs) {
-      if (!item.name || !item.price) continue;
-      const subId = `sub-${crypto.randomUUID()}`;
-      await insertStmt.run(
-        subId,
-        userId,
-        String(item.name).trim(),
-        item.category || 'Other',
-        Number(item.price) || 0,
-        (item.currency || 'USD').toUpperCase(),
-        item.billing_cycle || 'monthly',
-        item.payment_method || 'credit_card',
-        item.start_date || new Date().toISOString().split('T')[0],
-        item.next_billing_date || new Date().toISOString().split('T')[0],
-        item.status || 'active',
-        item.notes || '',
-        item.website || '',
-        item.logo || '',
-        item.color || '#4F46E5',
-        Number(item.reminder_days) || 3,
-        item.auto_renew !== undefined ? Number(Boolean(item.auto_renew)) : 1,
-        item.cancellation_url || ''
-      );
-      importedCount++;
-    }
-  });
-
-  await tx(items);
+  await db.transaction(async () => {
+    for (const item of parsed.data) if ((await importSubscription(userId,item)).added) importedCount++;
+  })();
 
   return res.json({
     success: true,

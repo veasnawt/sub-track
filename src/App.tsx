@@ -21,7 +21,7 @@ export const App: React.FC = () => {
   const { user, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
 
-  const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [currentTab, setCurrentTab] = useState<string>(new URLSearchParams(window.location.search).has('gmail')?'settings':'dashboard');
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null);
   const [loading, setLoading] = useState<boolean>(true);

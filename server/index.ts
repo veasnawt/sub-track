@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { initDatabase } from './db';
 import authRouter from './routes/auth';
+import gmailRouter from './routes/gmail';
 import subscriptionsRouter from './routes/subscriptions';
 import analyticsRouter from './routes/analytics';
 import categoriesRouter from './routes/categories';
@@ -68,6 +69,9 @@ app.use('/analytics', analyticsRouter);
 
 app.use('/api/categories', categoriesRouter);
 app.use('/categories', categoriesRouter);
+
+app.use('/api/gmail', gmailRouter);
+app.use('/gmail', gmailRouter);
 
 // Catch-all for unmatched API routes
 app.use((req, res) => {

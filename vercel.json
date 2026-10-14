@@ -14,5 +14,16 @@
       "source": "/(.*)",
       "destination": "/index.html"
     }
-  ]
+  ],
+  "crons": [
+    {
+      "path": "/api/gmail/cron",
+      "schedule": "0 1 * * *"
+    }
+  ],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300
+    }
+  }
 }

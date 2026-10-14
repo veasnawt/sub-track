@@ -15,6 +15,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { SUPPORTED_CURRENCIES } from '../lib/currency';
 import { api } from '../lib/api';
+import { GmailSync } from '../components/GmailSync';
 
 interface SettingsPageProps {
   onOpenExportImport: () => void;
@@ -187,6 +188,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         </form>
       </div>
 
+      <GmailSync onChange={onDataReset} />
+
       {/* Section 2: Data Transfer & Backup */}
       <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-2xs space-y-4">
         <div className="flex items-center gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
@@ -262,10 +265,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       <div className="p-6 rounded-3xl bg-slate-100/60 dark:bg-slate-900/40 border border-slate-200/80 dark:border-slate-800 text-xs space-y-2 text-slate-500 dark:text-slate-400">
         <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-slate-300">
           <Database size={15} />
-          <span>Production SQLite Engine Active</span>
+          <span>Subscriptions saved securely</span>
         </div>
         <p className="text-[11px] leading-relaxed">
-          SubTrack persists user sessions and subscriptions in SQLite with WAL mode (Write-Ahead Logging) and foreign-key constraints. All operations are scoped securely per authenticated user.
+          Your subscriptions are saved in your account and available after signing in again.
         </p>
       </div>
     </div>

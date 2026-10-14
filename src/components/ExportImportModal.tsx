@@ -85,6 +85,13 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
     reader.onload = (evt) => {
       try {
         const text = evt.target?.result as string;
+        if (file.name.toLowerCase().endsWith('.json')) {
+          const json = JSON.parse(text);
+          const items = Array.isArray(json) ? json : json.subscriptions;
+          if (!Array.isArray(items) || !items.length) throw new Error('JSON must contain a nonempty subscription array.');
+          setParsedItems(items);
+          return;
+        }
         const lines = text.split(/\r\n|\n/).filter(line => line.trim() !== '');
         if (lines.length < 2) {
           throw new Error('CSV file must have a header line and at least one data row.');
@@ -177,7 +184,7 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            Import CSV
+            Import CSV / JSON
           </button>
         </div>
 
@@ -215,7 +222,7 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Upload a CSV file containing your subscriptions.
+                  Upload a CSV or JSON file containing your subscriptions.
                 </p>
                 <button
                   type="button"
@@ -240,15 +247,15 @@ Spotify,Music & Audio,11.99,USD,monthly,paypal,2025-02-15,2026-02-15,active,Indi
               >
                 <Upload size={28} className="mx-auto text-indigo-500 mb-2" />
                 <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                  {parsedItems.length > 0 ? `${parsedItems.length} rows ready to import` : 'Click to select CSV file'}
+                  {parsedItems.length > 0 ? `${parsedItems.length} rows ready to import` : 'Click to select CSV or JSON file'}
                 </p>
                 <p className="text-[11px] text-slate-400 mt-1">
-                  Supports comma-separated values (.csv)
+                  Supports CSV (.csv) and complete backups (.json)
                 </p>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv"
+                  accept=".csv,.json"
                   onChange={handleFileChange}
                   className="hidden"
                 />

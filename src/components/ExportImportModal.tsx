@@ -1,9 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Download, Upload, Close, Check, Document, Idea } from '@veasnawt/vicons';
 import { Subscription } from '../types';
 
 interface ExportImportModalProps {
   isOpen: boolean;
+  initialTab?: 'export' | 'json' | 'csv';
   onClose: () => void;
   subscriptions: Subscription[];
   onImport: (items: Partial<Subscription>[]) => Promise<void>;
@@ -11,15 +12,24 @@ interface ExportImportModalProps {
 
 export const ExportImportModal: React.FC<ExportImportModalProps> = ({
   isOpen,
+  initialTab = 'export',
   onClose,
   subscriptions,
   onImport,
 }) => {
-  const [activeTab, setActiveTab] = useState<'export' | 'json' | 'csv'>('export');
+  const [activeTab, setActiveTab] = useState<'export' | 'json' | 'csv'>(initialTab);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [parsedItems, setParsedItems] = useState<Partial<Subscription>[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setActiveTab(initialTab);
+      setParsedItems([]);
+      setImportError(null);
+    }
+  }, [isOpen, initialTab]);
 
   if (!isOpen) return null;
 

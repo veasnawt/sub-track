@@ -33,6 +33,11 @@ export const App: React.FC = () => {
   const [deletingSub, setDeletingSub] = useState<Subscription | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [isExportImportOpen, setIsExportImportOpen] = useState(false);
+  const [importTab, setImportTab] = useState<'export' | 'json'>('export');
+  const openTransfer = (tab: 'export' | 'json' = 'export') => {
+    setImportTab(tab);
+    setIsExportImportOpen(true);
+  };
 
   // Load subscriptions & analytics
   const refreshData = useCallback(async () => {
@@ -251,7 +256,7 @@ export const App: React.FC = () => {
               onDeleteSubscription={setDeletingSub}
               onRenewSubscription={handleRenewSubscription}
               onToggleStatus={handleToggleStatus}
-              onOpenExportImport={() => setIsExportImportOpen(true)}
+              onOpenExportImport={() => openTransfer()}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
             />
@@ -271,13 +276,14 @@ export const App: React.FC = () => {
             <AnalyticsPage
               analytics={analytics}
               loading={loading}
-              onOpenExportImport={() => setIsExportImportOpen(true)}
+              onOpenExportImport={() => openTransfer()}
             />
           )}
 
           {currentTab === 'settings' && (
             <SettingsPage
-              onOpenExportImport={() => setIsExportImportOpen(true)}
+              onOpenExportImport={() => openTransfer()}
+              onOpenImportJSON={() => openTransfer('json')}
               onDataReset={refreshData}
             />
           )}
@@ -305,7 +311,9 @@ export const App: React.FC = () => {
       />
 
       <ExportImportModal
+        key={importTab}
         isOpen={isExportImportOpen}
+        initialTab={importTab}
         onClose={() => setIsExportImportOpen(false)}
         subscriptions={subscriptions}
         onImport={handleImportSubscriptions}
